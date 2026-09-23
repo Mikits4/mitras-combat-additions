@@ -1,0 +1,14 @@
+{
+  "item.mitras-combat-additions.flail": "Flail",
+
+  "enchantment.mitras-combat-additions.protraction": "Protraction",
+  "enchantment.mitras-combat-additions.multiswipples": "Multiswipples",
+  "enchantment.mitras-combat-additions.grapple": "Grapple",
+
+  "tooltip.mitras-combat-additions.flail": "Close the distance and catch your enemy off guard",
+
+  "effect.mitras-combat-additions.bleed": "Bleed",
+
+  "death.attack.bleed": "%s lost too much blood",
+  "death.attack.bleed.player": "%s lost too much blood while fighting %s"
+}

@@ -19,7 +19,7 @@ public class ModCreativeModeTabs {
                     .displayItems((parameters, output) -> {
 
                         output.accept(ModItems.FLAIL);
-
+                        output.accept(ModItems.ZWEIHANDER);
                     }).build());
 
     public static void registerCreativeModeTabs() {

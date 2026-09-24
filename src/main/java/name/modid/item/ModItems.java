@@ -3,6 +3,7 @@ package name.modid.item;
 import name.modid.MitraSCombatAdditions;
 
 import name.modid.item.custom.FlailItem;
+import name.modid.item.custom.ZweihanderItem;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -22,6 +23,11 @@ public class ModItems {
     public static final Item FLAIL = registerItem(
             "flail",
             FlailItem::new
+    );
+
+    public static final Item ZWEIHANDER = registerItem(
+            "zweihander",
+            ZweihanderItem::new
     );
 
     private static Item registerItem(String name, Function<Item.Properties, Item> function) {

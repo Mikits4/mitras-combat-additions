@@ -26,6 +26,14 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
+loom {
+	runs {
+		client {
+			vmArgs "-Dfabric.development=false"
+		}
+	}
+}
+
 processResources {
 	def version = project.version
 	inputs.property "version", version

@@ -164,8 +164,11 @@ public class HeavyCoreEntity extends Entity {
 
     /*
      * Number of ticks the head remains attached to an entity.
+     *
+     * Increased from 3 to 8 so the grapple can continuously accelerate
+     * the player instead of only giving a single burst.
      */
-    private static final int HOOK_LATCH_TICKS = 3;
+    private static final int HOOK_LATCH_TICKS = 4;
 
 
     /*
@@ -183,28 +186,58 @@ public class HeavyCoreEntity extends Entity {
 
     /*
      * -------------------------------------------------------------------------
-     * GRAPPLE
-     * -------------------------------------------------------------------------
-     */
-
-    private static final double GRAPPLE_LIFT = 0.45D;
-
-    private static final double GRAPPLE_STRENGTH = 0.40D;
-
-    private static final double MAX_GRAPPLE_SPEED = 1.65D;
-
-
-    /*
-     * -------------------------------------------------------------------------
      * ENTITY PULL
      * -------------------------------------------------------------------------
      */
 
+    /*
+     * Base strength of the crouching grapple.
+     *
+     * The standing grapple uses this exact same value as its base strength.
+     */
     private static final double ENTITY_PULL_STRENGTH = 0.40D;
 
-    private static final double ENTITY_PULL_LIFT = 0.18D;
+    private static final double ENTITY_PULL_LIFT = 1.50D;
 
     private static final double ENTITY_PULL_MAX_SPEED = 1.50D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * GRAPPLE
+     * -------------------------------------------------------------------------
+     */
+
+    /*
+     * Standing grapple starts at exactly the same base strength
+     * as the crouching/entity pull.
+     */
+    private static final double GRAPPLE_STRENGTH =
+            ENTITY_PULL_STRENGTH;
+
+    /*
+     * Additional horizontal force based on distance.
+     *
+     * The farther away the target is, the stronger the horizontal pull.
+     */
+    private static final double GRAPPLE_DISTANCE_SCALE = 0.04D;
+
+    /*
+     * Continuous upward acceleration applied every hooked tick.
+     *
+     * This is intentionally independent from the horizontal force.
+     */
+    private static final double GRAPPLE_VERTICAL_FORCE = 0.14D;
+
+    /*
+     * Maximum upward velocity from the continuous grapple lift.
+     */
+    private static final double GRAPPLE_MAX_VERTICAL_SPEED = 1.20D;
+
+    /*
+     * Maximum horizontal grapple force per hooked tick.
+     */
+    private static final double MAX_GRAPPLE_FORCE = 2.10D;
 
 
     /*
@@ -716,19 +749,12 @@ public class HeavyCoreEntity extends Entity {
                 getHandPosition(owner);
 
 
-        Vec3 target =
+        Vec3 projectileCenter =
                 handPosition
-                        .add(orbitOffset)
-                        .subtract(
-                                0.5D,
-                                0.5D,
-                                0.5D
-                        );
+                        .add(orbitOffset);
 
-        setPos(
-                target.x,
-                target.y,
-                target.z
+        setProjectileCenter(
+                projectileCenter
         );
 
         setDeltaMovement(Vec3.ZERO);
@@ -885,10 +911,8 @@ public class HeavyCoreEntity extends Entity {
                             target.getBoundingBox()
                                     .getCenter();
 
-                    setPos(
-                            center.x,
-                            center.y,
-                            center.z
+                    setProjectileCenter(
+                            center
                     );
                 }
             }
@@ -1016,10 +1040,8 @@ public class HeavyCoreEntity extends Entity {
                         != HitResult.Type.MISS
         ) {
 
-            setPos(
-                    hit.getLocation().x,
-                    hit.getLocation().y,
-                    hit.getLocation().z
+            setProjectileCenter(
+                    hit.getLocation()
             );
 
 
@@ -1128,6 +1150,12 @@ public class HeavyCoreEntity extends Entity {
 
 
         if (reversePull) {
+
+            /*
+             * Crouching mode:
+             * pull the entity immediately.
+             * Continued pulling happens every hooked tick.
+             */
             pullEntityTowardPlayer(
                     owner,
                     target
@@ -1138,14 +1166,13 @@ public class HeavyCoreEntity extends Entity {
 
 
         /*
-         * Standing mode gets the strong grapple burst.
+         * Standing mode:
          *
-         * This is the old working grapple behavior.
+         * No one-time launch is applied here.
+         *
+         * The full grapple force is continuously applied
+         * by tickHooked() for the entire hook duration.
          */
-        pullPlayerTowardEntity(
-                owner,
-                target
-        );
     }
 
 
@@ -1207,13 +1234,14 @@ public class HeavyCoreEntity extends Entity {
                         .getCenter();
 
 
-        setPos(
-                targetCenter.x,
-                targetCenter.y,
-                targetCenter.z
+        setProjectileCenter(
+                targetCenter
         );
 
 
+        /*
+         * This is the FLAIL's movement, not the player's.
+         */
         setDeltaMovement(Vec3.ZERO);
 
 
@@ -1224,7 +1252,28 @@ public class HeavyCoreEntity extends Entity {
 
 
         if (reversePull) {
+
+            /*
+             * Crouch mode:
+             * pull entity toward player every hooked tick.
+             */
             pullEntityTowardPlayer(
+                    owner,
+                    target
+            );
+
+        } else {
+
+            /*
+             * Standing grapple:
+             *
+             * Apply the grapple continuously for EVERY
+             * hooked tick.
+             *
+             * This means both horizontal and vertical
+             * movement continue while attached.
+             */
+            pullPlayerTowardEntity(
                     owner,
                     target
             );
@@ -1253,7 +1302,6 @@ public class HeavyCoreEntity extends Entity {
                 target.getBoundingBox()
                         .getCenter();
 
-
         Vec3 ownerPosition =
                 owner.getEyePosition();
 
@@ -1272,6 +1320,9 @@ public class HeavyCoreEntity extends Entity {
                 direction.normalize();
 
 
+        /*
+         * Keep the crouch grapple's original lift behavior.
+         */
         direction =
                 new Vec3(
                         direction.x,
@@ -1328,76 +1379,126 @@ public class HeavyCoreEntity extends Entity {
                 player.getEyePosition();
 
 
-        Vec3 direction =
+        Vec3 difference =
                 targetPosition
                         .subtract(playerPosition);
 
 
-        if (direction.lengthSqr() < 1.0E-6D) {
+        if (difference.lengthSqr() < 1.0E-6D) {
             return;
         }
 
 
+        /*
+         * Measure distance BEFORE normalizing.
+         *
+         * This is used for distance-based grapple scaling.
+         */
         double distance =
-                direction.length();
+                difference.length();
 
 
         /*
-         * This is the important part.
+         * Horizontal direction toward the target.
          *
-         * The old working grapple used a much stronger immediate
-         * burst than the normal GRAPPLE_STRENGTH pull.
+         * Y is deliberately ignored here so the main grapple
+         * remains a forward pull rather than a vertical launch.
          */
-        direction =
-                direction.normalize();
-
-
-        /*
-         * Add the upward grapple component AFTER normalizing.
-         *
-         * This gives the grapple an actual jump rather than merely
-         * pulling along the line between the player and target.
-         */
-        direction =
+        Vec3 horizontalDirection =
                 new Vec3(
-                        direction.x,
-                        direction.y
-                                + GRAPPLE_LIFT,
-                        direction.z
-                ).normalize();
-
-
-        /*
-         * Strong initial grapple burst.
-         *
-         * This is deliberately NOT clamped to MAX_GRAPPLE_SPEED,
-         * because that clamp was suppressing the jump from the
-         * older working behavior.
-         */
-        double burstStrength =
-                Math.min(
-                        1.35D
-                                + (
-                                distance
-                                        * 0.04D
-                        ),
-                        2.10D
+                        difference.x,
+                        0.0D,
+                        difference.z
                 );
 
 
-        Vec3 pull =
-                direction
-                        .scale(
-                                burstStrength
-                        );
+        if (horizontalDirection.lengthSqr()
+                < 1.0E-6D) {
+
+            horizontalDirection =
+                    Vec3.ZERO;
+
+        } else {
+
+            horizontalDirection =
+                    horizontalDirection.normalize();
+        }
 
 
+        /*
+         * Start with the same base strength as the crouch grapple.
+         *
+         * Then increase horizontal force with distance.
+         */
+        double grappleForce =
+                GRAPPLE_STRENGTH
+                        + (
+                        distance
+                                * GRAPPLE_DISTANCE_SCALE
+                );
+
+
+        grappleForce =
+                Math.min(
+                        grappleForce,
+                        MAX_GRAPPLE_FORCE
+                );
+
+
+        /*
+         * Continuous horizontal force.
+         *
+         * This is applied every hooked tick.
+         */
+        Vec3 horizontalPull =
+                horizontalDirection.scale(
+                        grappleForce
+                );
+
+
+        /*
+         * Continuous vertical force.
+         *
+         * This is also applied every hooked tick.
+         */
+        double newVerticalVelocity =
+                player.getDeltaMovement().y
+                        + GRAPPLE_VERTICAL_FORCE;
+
+
+        /*
+         * Limit upward velocity so the player does not
+         * accelerate upward forever during the grapple.
+         */
+        newVerticalVelocity =
+                Math.min(
+                        newVerticalVelocity,
+                        GRAPPLE_MAX_VERTICAL_SPEED
+                );
+
+
+        /*
+         * Preserve the player's current velocity while adding
+         * the continuous grapple force.
+         */
         Vec3 velocity =
-                player.getDeltaMovement()
-                        .add(pull);
+                player.getDeltaMovement();
 
 
-        player.setDeltaMovement(velocity);
+        velocity =
+                new Vec3(
+                        velocity.x
+                                + horizontalPull.x,
+                        newVerticalVelocity,
+                        velocity.z
+                                + horizontalPull.z
+                );
+
+
+        player.setDeltaMovement(
+                velocity
+        );
+
 
         player.hurtMarked = true;
     }
@@ -2069,6 +2170,21 @@ public class HeavyCoreEntity extends Entity {
         return EntityDimensions.fixed(
                 0.5F,
                 0.5F
+        );
+    }
+
+    private void setProjectileCenter(
+            Vec3 center
+    ) {
+
+        double halfHeight =
+                getDimensions(Pose.STANDING).height()
+                        * 0.5D;
+
+        setPos(
+                center.x,
+                center.y - halfHeight,
+                center.z
         );
     }
 }

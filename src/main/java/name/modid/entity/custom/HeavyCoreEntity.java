@@ -109,7 +109,7 @@ public class HeavyCoreEntity extends Entity {
      *
      * 8 ticks = 0.4 seconds.
      */
-    private static final int HOOK_LATCH_TICKS = 8;
+    private static final int HOOK_LATCH_TICKS = 4;
 
 
     /*

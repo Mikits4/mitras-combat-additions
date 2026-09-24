@@ -10,5 +10,7 @@
   "effect.mitras-combat-additions.bleed": "Bleed",
 
   "death.attack.bleed": "%s lost too much blood",
-  "death.attack.bleed.player": "%s lost too much blood while fighting %s"
+  "death.attack.bleed.player": "%s lost too much blood while fighting %s",
+
+  "creativetab.mitras-combat-additions.mitras_combat_additions": "Mitra's Combat Additions"
 }

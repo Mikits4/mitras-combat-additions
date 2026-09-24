@@ -11,112 +11,270 @@ import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.level.storage.ValueInput;
-import net.minecraft.world.level.storage.ValueOutput;
 
-import java.util.Optional;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 public class HeavyCoreEntity extends Entity {
-    private static final double GRAPPLE_LIFT = 0.45D;
-    private static final double ENTITY_PULL_LIFT = 0.18D;
+
+    // =========================================================================
+    // TUNING
+    // =========================================================================
 
     /*
-     * How long a throw can remain in the air.
+     * -------------------------------------------------------------------------
+     * CHARGE / WIND-UP
+     * -------------------------------------------------------------------------
+     */
+
+    /*
+     * Maximum wind-up time.
+     *
+     * 40 ticks = 2 seconds.
+     */
+    private static final int CHARGE_DURATION_TICKS = 40;
+
+    /*
+     * Angular orbit speed at minimum wind-up.
+     *
+     * Negative means the flail rotates in the chosen direction.
+     */
+    private static final double ORBIT_START_SPEED = -0.15D;
+
+    /*
+     * Additional angular speed at full wind-up.
+     */
+    private static final double ORBIT_SPEED_GROWTH = -0.50D;
+
+    /*
+     * Radius of the orbit at minimum charge.
+     */
+    private static final double ORBIT_START_RADIUS = 0.20D;
+
+    /*
+     * Additional orbit radius at full charge.
+     */
+    private static final double ORBIT_RADIUS_GROWTH = 0.60D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * THROW
+     * -------------------------------------------------------------------------
+     */
+
+    /*
+     * Minimum launch speed.
+     *
+     * A barely wound throw should basically fall away from the hand.
+     */
+    private static final double THROW_MIN_SPEED = 0.20D;
+
+    /*
+     * Maximum launch speed at full wind-up.
+     */
+    private static final double THROW_MAX_SPEED = 2.20D;
+
+    /*
+     * Physical swing speed at minimum charge.
+     *
+     * This is derived from the actual orbit settings so these values
+     * stay synchronized if the orbit is changed later.
+     */
+    private static final double THROW_MIN_SWING_SPEED =
+            Math.abs(ORBIT_START_SPEED)
+                    * ORBIT_START_RADIUS;
+
+    /*
+     * Physical swing speed at maximum charge.
+     */
+    private static final double THROW_FULL_SWING_SPEED =
+            Math.abs(
+                    ORBIT_START_SPEED
+                            + ORBIT_SPEED_GROWTH
+            )
+                    * (
+                    ORBIT_START_RADIUS
+                            + ORBIT_RADIUS_GROWTH
+            );
+
+    /*
+     * 1.0 = linear conversion from swing speed to throw speed.
+     *
+     * The previous value of 2.0 made the middle of the wind-up
+     * dramatically weaker than the full wind-up.
+     */
+    private static final double THROW_SPEED_CURVE = 1.0D;
+
+    /*
+     * Tiny upward release velocity.
+     *
+     * Gravity is responsible for the arc.
+     */
+    private static final double THROW_UPWARD_VELOCITY = 0.02D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * PROJECTILE PHYSICS
+     * -------------------------------------------------------------------------
+     */
+
+    /*
+     * Gravity applied manually every tick while flying.
+     */
+    private static final double PROJECTILE_GRAVITY = 0.025D;
+
+    /*
+     * Air drag.
+     */
+    private static final double PROJECTILE_AIR_DRAG = 0.995D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * FLIGHT LIMITS
+     * -------------------------------------------------------------------------
+     */
+
+    /*
+     * Maximum amount of time the projectile can remain flying.
      */
     private static final int MAX_FLIGHT_TICKS = 80;
 
     /*
-     * Maximum distance before the core gives up and returns.
-     */
-    private static final double MAX_THROW_DISTANCE = 24.0D;
-
-    /*
-     * How long a hooked entity can remain attached.
-     */
-    private static final int MAX_HOOK_TICKS = 60;
-
-    /*
-     * Charge time.
-     * 40 ticks = 2 seconds.
-     */
-    private static final int MAX_CHARGE_TICKS = 40;
-
-    /*
-     * Throw speed range.
-     */
-    private static final double MIN_THROW_SPEED = 1.6D;
-    private static final double MAX_THROW_SPEED = 4.8D;
-
-    /*
-     * Return speed.
-     */
-    private static final double RETURN_SPEED = 1.6D;
-
-    /*
-     * Stronger than a fishing rod.
+     * Absolute maximum distance before automatic return.
      *
-     * Vanilla fishing-hook pulling is roughly around 0.1 per tick.
+     * Full-power throws can now actually make use of their speed.
      */
-    private static final double ENTITY_PULL_STRENGTH = 0.40D;
+    private static final double MAX_THROW_DISTANCE = 40.0D;
+
 
     /*
-     * Player grapple acceleration.
+     * -------------------------------------------------------------------------
+     * HOOKING
+     * -------------------------------------------------------------------------
      */
-    private static final double GRAPPLE_STRENGTH = 0.40D;
 
     /*
-     * Maximum speed while being grappled.
+     * Number of ticks the head remains attached to an entity.
      */
-    private static final double MAX_GRAPPLE_SPEED = 1.65D;
+    private static final int HOOK_LATCH_TICKS = 3;
 
-    private UUID ownerUuid;
 
     /*
-     * Server and client both maintain these locally.
-     * This means charging/animation does not need a server
-     * teleport every tick.
+     * -------------------------------------------------------------------------
+     * DAMAGE
+     * -------------------------------------------------------------------------
      */
-    private int chargeTicks = 0;
-    private double orbitAngle = 0.0D;
-
-    private int flightTicks = 0;
-    private int hookTicks = 0;
-
-    /*
-     * Smooth visual spin.
-     *
-     * Renderer can interpolate it every frame.
-     */
-    private float spinAngle = 0.0F;
-
-    private float wobblePitch = 0.0F;
-    private float wobbleRoll = 0.0F;
-
-    private float wobblePitchVelocity = 0.0F;
-    private float wobbleRollVelocity = 0.0F;
 
     private static final float SWING_DAMAGE = 5.0F;
+
     private static final float THROW_DAMAGE = 6.0F;
 
     private static final int SWING_HIT_COOLDOWN = 5;
 
-    private final java.util.Map<UUID, Integer> swingHitCooldowns =
-            new java.util.HashMap<>();
 
-    private Vec3 lastClientPosition = Vec3.ZERO;
-    private Vec3 lastClientVelocity = Vec3.ZERO;
+    /*
+     * -------------------------------------------------------------------------
+     * GRAPPLE
+     * -------------------------------------------------------------------------
+     */
 
-    private enum State {
-        READY,
-        CHARGING,
-        FLYING,
-        HOOKED,
-        RETURNING
-    }
+    private static final double GRAPPLE_LIFT = 0.45D;
+
+    private static final double GRAPPLE_STRENGTH = 0.40D;
+
+    private static final double MAX_GRAPPLE_SPEED = 1.65D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * ENTITY PULL
+     * -------------------------------------------------------------------------
+     */
+
+    private static final double ENTITY_PULL_STRENGTH = 0.40D;
+
+    private static final double ENTITY_PULL_LIFT = 0.18D;
+
+    private static final double ENTITY_PULL_MAX_SPEED = 1.50D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * RETURN
+     * -------------------------------------------------------------------------
+     */
+
+    private static final double RETURN_BASE_SPEED = 1.60D;
+
+    private static final double RETURN_DISTANCE_SPEED = 0.04D;
+
+    private static final double RETURN_MAX_SPEED = 2.40D;
+
+    /*
+     * When this close, snap to the player and discard.
+     */
+    private static final double RETURN_CAPTURE_DISTANCE = 0.65D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * HAND POSITION
+     * -------------------------------------------------------------------------
+     *
+     * These match the current renderer.
+     * Keeping both sides identical prevents the chain and orbit center
+     * from drifting apart.
+     */
+
+    private static final double HAND_SIDE_OFFSET = 0.36D;
+
+    private static final double HAND_FORWARD_OFFSET = 0.04D;
+
+    private static final double HAND_HEIGHT_STANDING = 1.22D;
+
+    private static final double HAND_HEIGHT_CROUCHING = 1.02D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * VISUAL SPIN
+     * -------------------------------------------------------------------------
+     */
+
+    private static final float VISUAL_SPIN_START = 12.0F;
+
+    private static final float VISUAL_SPIN_GROWTH = 32.0F;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * WOBBLE
+     * -------------------------------------------------------------------------
+     */
+
+    private static final double WOBBLE_ACCELERATION_SCALE = 260.0D;
+
+    private static final double WOBBLE_MAX_ANGLE = 18.0D;
+
+    private static final float WOBBLE_SPRING = 0.18F;
+
+    private static final float WOBBLE_DAMPING = 0.80F;
+
+    private static final float WOBBLE_SETTLE = 0.985F;
+
+
+    // =========================================================================
+    // SYNCHED DATA
+    // =========================================================================
 
     private static final EntityDataAccessor<Integer> DATA_STATE =
             SynchedEntityData.defineId(
@@ -137,8 +295,8 @@ public class HeavyCoreEntity extends Entity {
             );
 
     /*
-     * true = crouching/fishing-rod mode
-     * false = standing/grapple mode
+     * true  = crouching / reverse fishing-rod pull
+     * false = standing / grapple
      */
     private static final EntityDataAccessor<Boolean> DATA_REVERSE_PULL =
             SynchedEntityData.defineId(
@@ -153,6 +311,54 @@ public class HeavyCoreEntity extends Entity {
             );
 
 
+    // =========================================================================
+    // INTERNAL STATE
+    // =========================================================================
+
+    private UUID ownerUuid;
+
+    private int chargeTicks = 0;
+
+    private double orbitAngle = 0.0D;
+
+    private int flightTicks = 0;
+
+    private int hookTicks = 0;
+
+    private float spinAngle = 0.0F;
+
+    private float wobblePitch = 0.0F;
+
+    private float wobbleRoll = 0.0F;
+
+    private float wobblePitchVelocity = 0.0F;
+
+    private float wobbleRollVelocity = 0.0F;
+
+    private Vec3 lastClientPosition = Vec3.ZERO;
+
+    private Vec3 lastClientVelocity = Vec3.ZERO;
+
+    private final Map<UUID, Integer> swingHitCooldowns =
+            new HashMap<>();
+
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
+
+    private enum State {
+        READY,
+        CHARGING,
+        FLYING,
+        HOOKED,
+        RETURNING
+    }
+
+
+    // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
 
     public HeavyCoreEntity(
             EntityType<? extends HeavyCoreEntity> type,
@@ -161,27 +367,29 @@ public class HeavyCoreEntity extends Entity {
         super(type, level);
 
         /*
-         * Normal entity.
-         *
-         * We deliberately are NOT a FallingBlockEntity.
+         * We handle projectile gravity ourselves.
          */
         setNoGravity(true);
 
         /*
-         * We perform projectile collision ourselves with
-         * ProjectileUtil.
+         * Collision is handled with ProjectileUtil.
          */
         this.noPhysics = true;
     }
 
-    // -------------------------------------------------------------------------
-    // STATE
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
+    // STATE HELPERS
+    // =========================================================================
 
     private State getState() {
-        int value = entityData.get(DATA_STATE);
+        int value =
+                entityData.get(DATA_STATE);
 
-        if (value < 0 || value >= State.values().length) {
+        if (
+                value < 0
+                        || value >= State.values().length
+        ) {
             return State.READY;
         }
 
@@ -203,25 +411,34 @@ public class HeavyCoreEntity extends Entity {
         return getState() == State.CHARGING;
     }
 
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
     // OWNER
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     public void setOwner(
             Player player,
             InteractionHand hand
     ) {
-        ownerUuid = player.getUUID();
+        ownerUuid =
+                player.getUUID();
 
         entityData.set(
                 DATA_OWNER,
                 player.getUUID().toString()
         );
 
-        boolean leftHand =
-                hand == InteractionHand.OFF_HAND
-                        ? player.getMainArm() == HumanoidArm.RIGHT
-                        : player.getMainArm() == HumanoidArm.LEFT;
+        boolean leftHand;
+
+        if (hand == InteractionHand.OFF_HAND) {
+            leftHand =
+                    player.getMainArm()
+                            == HumanoidArm.RIGHT;
+        } else {
+            leftHand =
+                    player.getMainArm()
+                            == HumanoidArm.LEFT;
+        }
 
         entityData.set(
                 DATA_LEFT_HAND,
@@ -230,32 +447,66 @@ public class HeavyCoreEntity extends Entity {
     }
 
     private Player getOwner() {
-        String uuidString = entityData.get(DATA_OWNER);
+        String uuidString =
+                entityData.get(DATA_OWNER);
 
-        if (uuidString == null || uuidString.isEmpty()) {
+        if (
+                uuidString == null
+                        || uuidString.isEmpty()
+        ) {
             return null;
         }
 
         try {
-            UUID uuid = UUID.fromString(uuidString);
-            return level().getPlayerByUUID(uuid);
+            UUID uuid =
+                    UUID.fromString(uuidString);
+
+            return level()
+                    .getPlayerByUUID(uuid);
+
         } catch (IllegalArgumentException ignored) {
             return null;
         }
     }
 
-    // -------------------------------------------------------------------------
+    public UUID getOwnerUuid() {
+        if (ownerUuid != null) {
+            return ownerUuid;
+        }
+
+        String value =
+                entityData.get(DATA_OWNER);
+
+        if (
+                value == null
+                        || value.isEmpty()
+        ) {
+            return null;
+        }
+
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+
+    // =========================================================================
     // CHARGING
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     public void startCharging() {
         setState(State.CHARGING);
 
         chargeTicks = 0;
+
         orbitAngle = 0.0D;
+
         spinAngle = 0.0F;
 
         flightTicks = 0;
+
         hookTicks = 0;
 
         entityData.set(
@@ -264,6 +515,7 @@ public class HeavyCoreEntity extends Entity {
         );
 
         setNoGravity(true);
+
         setDeltaMovement(Vec3.ZERO);
     }
 
@@ -271,36 +523,242 @@ public class HeavyCoreEntity extends Entity {
         return chargeTicks;
     }
 
-    /*
-     * 0.0 -> 1.0 charge amount.
-     */
     public float getChargeProgress() {
         return Math.min(
                 1.0F,
-                chargeTicks / (float) MAX_CHARGE_TICKS
+                chargeTicks
+                        / (float) CHARGE_DURATION_TICKS
         );
     }
 
+
     /*
-     * Throw speed based on charge.
+     * Returns the actual physical speed of the swinging head.
      *
-     * Uses quadratic scaling so the last part of the wind-up
-     * matters much more.
+     * IMPORTANT:
+     *
+     * The orbit can rotate in a negative direction.
+     * Physical speed is still positive, so we use abs().
      */
-    public double getThrowSpeed() {
-        double progress = getChargeProgress();
+    public double getSwingSpeed() {
+        double progress =
+                getChargeProgress();
 
-        double curvedProgress =
-                progress * progress;
+        double orbitSpeed =
+                ORBIT_START_SPEED
+                        + (
+                        ORBIT_SPEED_GROWTH
+                                * progress
+                );
 
-        return MIN_THROW_SPEED
-                + (MAX_THROW_SPEED - MIN_THROW_SPEED)
-                * curvedProgress;
+        double radius =
+                ORBIT_START_RADIUS
+                        + (
+                        ORBIT_RADIUS_GROWTH
+                                * progress
+                );
+
+        return Math.abs(orbitSpeed)
+                * radius;
     }
 
-    // -------------------------------------------------------------------------
-    // THROW
-    // -------------------------------------------------------------------------
+
+    /*
+     * Converts actual physical swing speed into throw speed.
+     *
+     * Minimum swing = minimum throw.
+     * Maximum swing = maximum throw.
+     */
+    public double getThrowSpeed() {
+        double swingSpeed =
+                getSwingSpeed();
+
+        double swingRange =
+                THROW_FULL_SWING_SPEED
+                        - THROW_MIN_SWING_SPEED;
+
+        if (swingRange <= 1.0E-6D) {
+            return THROW_MIN_SPEED;
+        }
+
+        double normalized =
+                (
+                        swingSpeed
+                                - THROW_MIN_SWING_SPEED
+                )
+                        / swingRange;
+
+        normalized =
+                Math.max(
+                        0.0D,
+                        Math.min(
+                                1.0D,
+                                normalized
+                        )
+                );
+
+        double curved =
+                Math.pow(
+                        normalized,
+                        THROW_SPEED_CURVE
+                );
+
+        return THROW_MIN_SPEED
+                + (
+                THROW_MAX_SPEED
+                        - THROW_MIN_SPEED
+        )
+                * curved;
+    }
+
+
+    // =========================================================================
+    // CHARGE ORBIT
+    // =========================================================================
+
+    private void tickCharging(Player owner) {
+
+        chargeTicks++;
+
+        if (chargeTicks > CHARGE_DURATION_TICKS) {
+            chargeTicks =
+                    CHARGE_DURATION_TICKS;
+        }
+
+        float progress =
+                getChargeProgress();
+
+        double orbitSpeed =
+                ORBIT_START_SPEED
+                        + (
+                        ORBIT_SPEED_GROWTH
+                                * progress
+                );
+
+        orbitAngle += orbitSpeed;
+
+        orbitAngle %=
+                Math.PI * 2.0D;
+
+        if (orbitAngle < 0.0D) {
+            orbitAngle +=
+                    Math.PI * 2.0D;
+        }
+
+
+        Vec3 forward =
+                owner.getLookAngle();
+
+        if (forward.lengthSqr() < 1.0E-6D) {
+            forward =
+                    new Vec3(
+                            0.0D,
+                            0.0D,
+                            1.0D
+                    );
+        } else {
+            forward =
+                    forward.normalize();
+        }
+
+
+        float yaw =
+                owner.getYRot();
+
+        double yawRadians =
+                Math.toRadians(yaw);
+
+        Vec3 right =
+                new Vec3(
+                        Math.cos(yawRadians),
+                        0.0D,
+                        Math.sin(yawRadians)
+                ).normalize();
+
+
+        Vec3 up =
+                forward.cross(right);
+
+        if (up.lengthSqr() < 1.0E-6D) {
+            up =
+                    new Vec3(
+                            0.0D,
+                            1.0D,
+                            0.0D
+                    );
+        } else {
+            up =
+                    up.normalize();
+        }
+
+
+        double radius =
+                ORBIT_START_RADIUS
+                        + (
+                        ORBIT_RADIUS_GROWTH
+                                * progress
+                );
+
+
+        Vec3 orbitOffset =
+                forward.scale(
+                        Math.cos(orbitAngle)
+                                * radius
+                ).add(
+                        up.scale(
+                                Math.sin(orbitAngle)
+                                        * radius
+                        )
+                );
+
+
+        Vec3 handPosition =
+                getHandPosition(owner);
+
+
+        Vec3 target =
+                handPosition
+                        .add(orbitOffset)
+                        .subtract(
+                                0.5D,
+                                0.5D,
+                                0.5D
+                        );
+
+        setPos(
+                target.x,
+                target.y,
+                target.z
+        );
+
+        setDeltaMovement(Vec3.ZERO);
+
+
+        float spinSpeed =
+                VISUAL_SPIN_START
+                        + (
+                        VISUAL_SPIN_GROWTH
+                                * progress
+                );
+
+        spinAngle += spinSpeed;
+
+        while (spinAngle >= 360.0F) {
+            spinAngle -= 360.0F;
+        }
+
+        while (spinAngle < 0.0F) {
+            spinAngle += 360.0F;
+        }
+
+
+        tickSwingDamage(owner);
+    }
+
+
+    // =========================================================================
+    // LAUNCH
+    // =========================================================================
 
     public void launch(
             Vec3 direction,
@@ -318,416 +776,358 @@ public class HeavyCoreEntity extends Entity {
         setState(State.FLYING);
 
         flightTicks = 0;
+
         hookTicks = 0;
 
-        double speed = getThrowSpeed();
 
-        Vec3 velocity;
+        double speed =
+                getThrowSpeed();
+
+
+        Vec3 launchDirection;
 
         if (direction.lengthSqr() < 1.0E-6D) {
-            velocity = Vec3.ZERO;
+            launchDirection =
+                    new Vec3(
+                            0.0D,
+                            0.0D,
+                            1.0D
+                    );
         } else {
-            velocity = direction
-                    .normalize()
-                    .scale(speed);
+            launchDirection =
+                    direction.normalize();
         }
 
+
+        Vec3 velocity =
+                launchDirection
+                        .scale(speed)
+                        .add(
+                                0.0D,
+                                THROW_UPWARD_VELOCITY,
+                                0.0D
+                        );
+
         setNoGravity(true);
+
         setDeltaMovement(velocity);
 
         hurtMarked = true;
     }
 
-    // -------------------------------------------------------------------------
-    // TICK
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
+    // MAIN TICK
+    // =========================================================================
 
     @Override
     public void tick() {
         super.tick();
 
-        Player owner = getOwner();
+        Player owner =
+                getOwner();
 
-        if (owner == null || !owner.isAlive()) {
+        if (
+                owner == null
+                        || !owner.isAlive()
+        ) {
             discard();
             return;
         }
 
-        /*
-         * Client:
-         *
-         * Simulate local movement as well.
-         * This prevents the projectile from visually relying
-         * only on ~20 server position updates per second.
-         */
+
         if (level().isClientSide()) {
             tickClient(owner);
             return;
         }
 
-        /*
-         * Server:
-         */
+
         tickServer(owner);
     }
 
+
     @Override
-    public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
+    public boolean hurtServer(
+            ServerLevel level,
+            DamageSource source,
+            float damage
+    ) {
         return false;
     }
 
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
     // CLIENT TICK
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     private void tickClient(Player owner) {
-        State state = getState();
 
-        if (state == State.CHARGING) {
-            tickCharging(owner);
-        } else if (state == State.FLYING) {
-            move(
-                    MoverType.SELF,
-                    getDeltaMovement()
-            );
+        State state =
+                getState();
 
-            setDeltaMovement(
-                    getDeltaMovement()
-                            .scale(0.99D)
-            );
-        } else if (state == State.HOOKED) {
-            Entity target = getHookedEntity();
+        switch (state) {
 
-            if (target != null && target.isAlive()) {
-                Vec3 center =
-                        target.getBoundingBox()
-                                .getCenter();
+            case CHARGING ->
+                    tickCharging(owner);
 
-                setPos(
-                        center.x,
-                        center.y,
-                        center.z
-                );
+            case FLYING ->
+                    tickClientFlightPhysics();
+
+            case HOOKED -> {
+                Entity target =
+                        getHookedEntity();
+
+                if (
+                        target != null
+                                && target.isAlive()
+                ) {
+                    Vec3 center =
+                            target.getBoundingBox()
+                                    .getCenter();
+
+                    setPos(
+                            center.x,
+                            center.y,
+                            center.z
+                    );
+                }
             }
-        } else if (state == State.RETURNING) {
-            tickReturning(owner);
+
+            case RETURNING ->
+                    tickReturning(owner);
+
+            case READY -> {
+                // Nothing.
+            }
         }
 
-        /*
-         * Use the current movement direction as the wobble reference.
-         *
-         * During charging the head direction becomes the reference,
-         * so the wobble/orientation follows the player's view.
-         */
+
         Vec3 referenceAxis;
 
         if (state == State.CHARGING) {
-            referenceAxis = owner.getLookAngle();
+            referenceAxis =
+                    owner.getLookAngle();
         } else {
-            referenceAxis = getDeltaMovement();
+            referenceAxis =
+                    getDeltaMovement();
 
-            if (referenceAxis.lengthSqr() < 1.0E-6D) {
-                referenceAxis = owner.getLookAngle();
+            if (
+                    referenceAxis.lengthSqr()
+                            < 1.0E-6D
+            ) {
+                referenceAxis =
+                        owner.getLookAngle();
             }
         }
 
         updateWobble(referenceAxis);
     }
 
-    // -------------------------------------------------------------------------
+
+    private void tickClientFlightPhysics() {
+
+        Vec3 velocity =
+                getDeltaMovement();
+
+
+        velocity =
+                new Vec3(
+                        velocity.x,
+                        velocity.y
+                                - PROJECTILE_GRAVITY,
+                        velocity.z
+                );
+
+
+        velocity =
+                velocity.scale(
+                        PROJECTILE_AIR_DRAG
+                );
+
+
+        move(
+                MoverType.SELF,
+                velocity
+        );
+
+
+        setDeltaMovement(velocity);
+    }
+
+
+    // =========================================================================
     // SERVER TICK
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     private void tickServer(Player owner) {
-        State state = getState();
+
+        State state =
+                getState();
 
         switch (state) {
-            case CHARGING -> tickCharging(owner);
-            case FLYING -> tickFlying(owner);
-            case HOOKED -> tickHooked(owner);
-            case RETURNING -> tickReturning(owner);
+
+            case CHARGING ->
+                    tickCharging(owner);
+
+            case FLYING ->
+                    tickFlying(owner);
+
+            case HOOKED ->
+                    tickHooked(owner);
+
+            case RETURNING ->
+                    tickReturning(owner);
+
             case READY -> {
                 // Nothing.
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // CHARGE ORBIT
-    // -------------------------------------------------------------------------
 
-    private void tickCharging(Player owner) {
-        chargeTicks++;
-
-        if (chargeTicks > MAX_CHARGE_TICKS) {
-            chargeTicks = MAX_CHARGE_TICKS;
-        }
-
-        float progress = getChargeProgress();
-
-        /*
-         * The orbit gets faster as the flail is wound up.
-         */
-        double orbitSpeed =
-                0.16D
-                        + (0.26D * progress);
-
-        orbitAngle += orbitSpeed;
-
-        if (orbitAngle >= Math.PI * 2.0D) {
-            orbitAngle -= Math.PI * 2.0D;
-        }
-
-        /*
-         * ---------------------------------------------------------
-         * PLAYER HEAD DIRECTION
-         * ---------------------------------------------------------
-         *
-         * This is the direction the player is looking.
-         * We want pitch to affect the plane of the wind-up.
-         */
-        Vec3 forward = owner.getLookAngle();
-
-        if (forward.lengthSqr() < 1.0E-6D) {
-            forward = new Vec3(
-                    0.0D,
-                    0.0D,
-                    1.0D
-            );
-        } else {
-            forward = forward.normalize();
-        }
-
-        /*
-         * Horizontal right vector based on the player's yaw.
-         *
-         * Unlike forward, this remains horizontal.
-         */
-        float yaw = owner.getYRot();
-        double yawRadians = Math.toRadians(yaw);
-
-        Vec3 right = new Vec3(
-                Math.cos(yawRadians),
-                0.0D,
-                Math.sin(yawRadians)
-        ).normalize();
-
-        /*
-         * Create a vector perpendicular to both right and forward.
-         *
-         * At normal head pitch this is approximately world-up.
-         *
-         * Looking upward/downward tilts this vector accordingly.
-         */
-        Vec3 up =
-                forward.cross(right);
-
-        if (up.lengthSqr() < 1.0E-6D) {
-            up = new Vec3(
-                    0.0D,
-                    1.0D,
-                    0.0D
-            );
-        } else {
-            up = up.normalize();
-        }
-
-        /*
-         * ---------------------------------------------------------
-         * ORBIT
-         * ---------------------------------------------------------
-         *
-         * The orbit plane is made from:
-         *
-         *     forward + up
-         *
-         * with right as the plane's normal.
-         *
-         * That means:
-         *
-         *   look straight ahead → vertical-ish wind-up
-         *   look upward         → wind-up pitches upward
-         *   look downward       → wind-up pitches downward
-         */
-        double radius =
-                1.85D
-                        + (0.55D * progress);
-
-        Vec3 orbitOffset =
-                forward.scale(
-                        Math.cos(orbitAngle) * radius
-                ).add(
-                        up.scale(
-                                Math.sin(orbitAngle) * radius
-                        )
-                );
-
-
-        /*
-         * ---------------------------------------------------------
-         * HAND CENTER
-         * ---------------------------------------------------------
-         *
-         * The flail now swings around the player's hand,
-         * not around their head.
-         */
-        Vec3 handPosition =
-                getHandPosition(owner);
-
-        Vec3 target =
-                handPosition.add(orbitOffset);
-
-        setPos(
-                target.x,
-                target.y,
-                target.z
-        );
-
-        setDeltaMovement(Vec3.ZERO);
-
-        /*
-         * Visual spin.
-         */
-        float spinSpeed =
-                12.0F
-                        + (32.0F * progress);
-
-        spinAngle += spinSpeed;
-
-        if (spinAngle >= 360.0F) {
-            spinAngle -= 360.0F;
-        }
-    }
-
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // FLYING
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     private void tickFlying(Player owner) {
+
         flightTicks++;
 
-        Vec3 velocity = getDeltaMovement();
 
-        if (velocity.lengthSqr() < 1.0E-6D) {
+        Vec3 velocity =
+                getDeltaMovement();
+
+
+        if (velocity.lengthSqr() < 1.0E-8D) {
             beginReturning();
             return;
         }
 
-        /*
-         * IMPORTANT:
-         *
-         * We check the entire movement vector before moving.
-         * ProjectileUtil performs the block/entity raycast, so
-         * fast throws cannot simply tunnel through a target.
-         */
-        HitResult hit = ProjectileUtil.getHitResultOnMoveVector(
-                this,
-                this::canHitEntity
-        );
 
-        if (hit.getType() != HitResult.Type.MISS) {
+        HitResult hit =
+                ProjectileUtil.getHitResultOnMoveVector(
+                        this,
+                        this::canHitEntity
+                );
+
+
+        if (
+                hit.getType()
+                        != HitResult.Type.MISS
+        ) {
+
             setPos(
                     hit.getLocation().x,
                     hit.getLocation().y,
                     hit.getLocation().z
             );
 
-            if (hit instanceof EntityHitResult entityHit) {
+
+            if (
+                    hit instanceof EntityHitResult entityHit
+            ) {
                 handleEntityHit(
                         owner,
                         entityHit
                 );
             } else {
-                /*
-                 * Block hit.
-                 *
-                 * We aren't making walls grapple points here;
-                 * the core simply returns.
-                 */
                 beginReturning();
             }
 
             return;
         }
 
-        /*
-         * Move on the server.
-         */
+
+        velocity =
+                new Vec3(
+                        velocity.x,
+                        velocity.y
+                                - PROJECTILE_GRAVITY,
+                        velocity.z
+                );
+
+
+        velocity =
+                velocity.scale(
+                        PROJECTILE_AIR_DRAG
+                );
+
+
         move(
                 MoverType.SELF,
                 velocity
         );
 
-        /*
-         * Slight drag.
-         */
-        setDeltaMovement(
-                velocity.scale(0.99D)
-        );
+        setDeltaMovement(velocity);
 
-        /*
-         * Safety limits.
-         */
+
         if (
-                flightTicks >= MAX_FLIGHT_TICKS
-                        || distanceTo(owner) >= MAX_THROW_DISTANCE
+                flightTicks
+                        >= MAX_FLIGHT_TICKS
+                        || distanceTo(owner)
+                        >= MAX_THROW_DISTANCE
         ) {
             beginReturning();
             return;
         }
 
+
         hurtMarked = true;
     }
 
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
     // ENTITY HIT
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     private void handleEntityHit(
             Player owner,
             EntityHitResult hit
     ) {
-        Entity target = hit.getEntity();
+
+        Entity target =
+                hit.getEntity();
+
 
         if (!canHitEntity(target)) {
             beginReturning();
             return;
         }
 
+
         entityData.set(
                 DATA_HOOKED_ENTITY,
                 target.getUUID().toString()
         );
 
+
         hookTicks = 0;
 
+
         setState(State.HOOKED);
+
+
         setDeltaMovement(Vec3.ZERO);
 
+
         boolean reversePull =
-                entityData.get(DATA_REVERSE_PULL);
+                entityData.get(
+                        DATA_REVERSE_PULL
+                );
 
-        Vec3 targetCenter =
-                target.getBoundingBox().getCenter();
 
-
-        if (target instanceof LivingEntity livingTarget) {
+        if (
+                target instanceof LivingEntity livingTarget
+        ) {
             livingTarget.hurt(
-                    owner.damageSources().playerAttack(owner),
-                    5.0F
+                    owner.damageSources()
+                            .playerAttack(owner),
+                    THROW_DAMAGE
             );
         }
 
-        /*
-         * ---------------------------------------------------------
-         * CROUCHING = FISHING ROD MODE
-         * ---------------------------------------------------------
-         */
-
 
         if (reversePull) {
-
-            // Pull starts immediately.
             pullEntityTowardPlayer(
                     owner,
                     target
@@ -736,73 +1136,58 @@ public class HeavyCoreEntity extends Entity {
             return;
         }
 
+
         /*
-         * ---------------------------------------------------------
-         * STANDING = GRAPPLE MODE
-         * ---------------------------------------------------------
+         * Standing mode gets the strong grapple burst.
          *
-         * Give the player an immediate burst toward the target,
-         * with an upward component so the grapple actually lifts
-         * the player off the ground.
+         * This is the old working grapple behavior.
          */
-        Vec3 playerPosition =
-                owner.getEyePosition();
-
-        Vec3 direction =
-                targetCenter.subtract(playerPosition);
-
-        if (direction.lengthSqr() > 1.0E-6D) {
-            direction = direction.normalize();
-
-            /*
-             * Add upward lift AFTER normalizing the direction.
-             */
-            direction = new Vec3(
-                    direction.x,
-                    direction.y + GRAPPLE_LIFT,
-                    direction.z
-            ).normalize();
-
-            double burstStrength = Math.min(
-                    1.35D + owner.distanceTo(target) * 0.04D,
-                    2.1D
-            );
-
-            owner.setDeltaMovement(
-                    owner.getDeltaMovement()
-                            .add(
-                                    direction.scale(
-                                            burstStrength
-                                    )
-                            )
-            );
-
-            owner.hurtMarked = true;
-        }
+        pullPlayerTowardEntity(
+                owner,
+                target
+        );
     }
+
+
+    // =========================================================================
+    // HOOKED ENTITY
+    // =========================================================================
 
     private Entity getHookedEntity() {
-        String uuidString =
-                entityData.get(DATA_HOOKED_ENTITY);
 
-        if (uuidString == null || uuidString.isEmpty()) {
+        String uuidString =
+                entityData.get(
+                        DATA_HOOKED_ENTITY
+                );
+
+
+        if (
+                uuidString == null
+                        || uuidString.isEmpty()
+        ) {
             return null;
         }
 
+
         try {
-            UUID uuid = UUID.fromString(uuidString);
+
+            UUID uuid =
+                    UUID.fromString(uuidString);
+
             return level().getEntity(uuid);
+
         } catch (IllegalArgumentException ignored) {
+
             return null;
         }
     }
 
-    // -------------------------------------------------------------------------
-    // HOOKED ENTITY
-    // -------------------------------------------------------------------------
 
     private void tickHooked(Player owner) {
-        Entity target = getHookedEntity();
+
+        Entity target =
+                getHookedEntity();
+
 
         if (
                 target == null
@@ -813,14 +1198,14 @@ public class HeavyCoreEntity extends Entity {
             return;
         }
 
+
         hookTicks++;
 
-        /*
-         * Keep the core attached to the target during
-         * the short latch period.
-         */
+
         Vec3 targetCenter =
-                target.getBoundingBox().getCenter();
+                target.getBoundingBox()
+                        .getCenter();
+
 
         setPos(
                 targetCenter.x,
@@ -828,15 +1213,16 @@ public class HeavyCoreEntity extends Entity {
                 targetCenter.z
         );
 
+
         setDeltaMovement(Vec3.ZERO);
 
-        boolean reversePull =
-                entityData.get(DATA_REVERSE_PULL);
 
-        /*
-         * Crouching mode continues pulling during
-         * the latch period.
-         */
+        boolean reversePull =
+                entityData.get(
+                        DATA_REVERSE_PULL
+                );
+
+
         if (reversePull) {
             pullEntityTowardPlayer(
                     owner,
@@ -844,191 +1230,314 @@ public class HeavyCoreEntity extends Entity {
             );
         }
 
-        /*
-         * 3 ticks = 150 ms.
-         *
-         * The actual pull already happened on impact.
-         * This is only the latch/release delay.
-         */
-        if (hookTicks >= 3) {
+
+        if (
+                hookTicks
+                        >= HOOK_LATCH_TICKS
+        ) {
             beginReturning();
         }
     }
 
-    // -------------------------------------------------------------------------
-    // PULL ENTITY TO PLAYER
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
+    // PULL ENTITY TOWARD PLAYER
+    // =========================================================================
 
     private void pullEntityTowardPlayer(
             Player owner,
             Entity target
     ) {
+
         Vec3 targetPosition =
-                target.getBoundingBox().getCenter();
+                target.getBoundingBox()
+                        .getCenter();
+
 
         Vec3 ownerPosition =
                 owner.getEyePosition();
 
+
         Vec3 direction =
-                ownerPosition.subtract(targetPosition);
+                ownerPosition
+                        .subtract(targetPosition);
+
 
         if (direction.lengthSqr() < 1.0E-6D) {
             return;
         }
 
-        direction = direction.normalize();
 
-        /*
-         * Give the hooked entity some upward movement too.
-         */
-        direction = new Vec3(
-                direction.x,
-                direction.y + ENTITY_PULL_LIFT,
-                direction.z
-        ).normalize();
+        direction =
+                direction.normalize();
+
+
+        direction =
+                new Vec3(
+                        direction.x,
+                        direction.y
+                                + ENTITY_PULL_LIFT,
+                        direction.z
+                ).normalize();
+
 
         Vec3 pull =
                 direction.scale(
                         ENTITY_PULL_STRENGTH
                 );
 
+
         Vec3 velocity =
                 target.getDeltaMovement()
                         .add(pull);
 
-        double maxSpeed = 1.5D;
 
-        if (velocity.length() > maxSpeed) {
+        if (
+                velocity.length()
+                        > ENTITY_PULL_MAX_SPEED
+        ) {
             velocity =
                     velocity.normalize()
-                            .scale(maxSpeed);
+                            .scale(
+                                    ENTITY_PULL_MAX_SPEED
+                            );
         }
+
 
         target.setDeltaMovement(velocity);
 
         target.hurtMarked = true;
     }
 
-    // -------------------------------------------------------------------------
-    // PULL PLAYER TO ENTITY
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
+    // PULL PLAYER TOWARD ENTITY
+    // =========================================================================
 
     private void pullPlayerTowardEntity(
             Player player,
             Entity target
     ) {
+
         Vec3 targetPosition =
                 target.getBoundingBox()
                         .getCenter();
 
+
         Vec3 playerPosition =
                 player.getEyePosition();
+
 
         Vec3 direction =
                 targetPosition
                         .subtract(playerPosition);
 
+
         if (direction.lengthSqr() < 1.0E-6D) {
             return;
         }
 
+
         double distance =
                 direction.length();
 
-        double strength =
+
+        /*
+         * This is the important part.
+         *
+         * The old working grapple used a much stronger immediate
+         * burst than the normal GRAPPLE_STRENGTH pull.
+         */
+        direction =
+                direction.normalize();
+
+
+        /*
+         * Add the upward grapple component AFTER normalizing.
+         *
+         * This gives the grapple an actual jump rather than merely
+         * pulling along the line between the player and target.
+         */
+        direction =
+                new Vec3(
+                        direction.x,
+                        direction.y
+                                + GRAPPLE_LIFT,
+                        direction.z
+                ).normalize();
+
+
+        /*
+         * Strong initial grapple burst.
+         *
+         * This is deliberately NOT clamped to MAX_GRAPPLE_SPEED,
+         * because that clamp was suppressing the jump from the
+         * older working behavior.
+         */
+        double burstStrength =
                 Math.min(
-                        GRAPPLE_STRENGTH
-                                + distance * 0.025D,
-                        0.55D
+                        1.35D
+                                + (
+                                distance
+                                        * 0.04D
+                        ),
+                        2.10D
                 );
+
 
         Vec3 pull =
                 direction
-                        .normalize()
-                        .scale(strength);
+                        .scale(
+                                burstStrength
+                        );
+
 
         Vec3 velocity =
                 player.getDeltaMovement()
                         .add(pull);
 
-        if (velocity.length() > MAX_GRAPPLE_SPEED) {
-            velocity =
-                    velocity.normalize()
-                            .scale(MAX_GRAPPLE_SPEED);
-        }
 
         player.setDeltaMovement(velocity);
 
         player.hurtMarked = true;
     }
 
-    // -------------------------------------------------------------------------
+
+    // =========================================================================
     // RETURN
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     private void beginReturning() {
+
         setState(State.RETURNING);
+
 
         entityData.set(
                 DATA_HOOKED_ENTITY,
                 ""
         );
 
+
         setNoGravity(true);
+
+
         setDeltaMovement(Vec3.ZERO);
     }
 
+
     private void tickReturning(Player owner) {
+
         Vec3 target =
-                owner.getEyePosition()
-                        .subtract(
-                                0.0D,
-                                0.15D,
-                                0.0D
-                        );
+                owner.getBoundingBox()
+                        .getCenter();
+
 
         Vec3 difference =
-                target.subtract(position());
+                target.subtract(
+                        position()
+                );
+
 
         double distance =
                 difference.length();
 
-        if (distance <= 0.7D) {
-            /*
-             * Returned to the player.
-             *
-             * Remove the projectile so another one can be thrown.
-             */
+
+        if (
+                distance
+                        <= RETURN_CAPTURE_DISTANCE
+        ) {
+
+            setPos(
+                    target.x,
+                    target.y,
+                    target.z
+            );
+
+            setDeltaMovement(Vec3.ZERO);
+
             discard();
+
             return;
         }
 
-        Vec3 velocity =
-                difference
-                        .normalize()
-                        .scale(
-                                Math.min(
-                                        RETURN_SPEED
-                                                + distance * 0.04D,
-                                        2.4D
-                                )
-                        );
 
-        setDeltaMovement(velocity);
+        if (distance < 1.0E-6D) {
+
+            setPos(
+                    target.x,
+                    target.y,
+                    target.z
+            );
+
+            setDeltaMovement(Vec3.ZERO);
+
+            discard();
+
+            return;
+        }
+
+
+        double speed =
+                Math.min(
+                        RETURN_BASE_SPEED
+                                + (
+                                distance
+                                        * RETURN_DISTANCE_SPEED
+                        ),
+                        RETURN_MAX_SPEED
+                );
+
+
+        Vec3 direction =
+                difference.normalize();
+
+
+        double step =
+                Math.min(
+                        speed,
+                        distance
+                );
+
+
+        Vec3 movement =
+                direction.scale(step);
+
+
+        if (step >= distance) {
+
+            setPos(
+                    target.x,
+                    target.y,
+                    target.z
+            );
+
+            setDeltaMovement(Vec3.ZERO);
+
+            discard();
+
+            return;
+        }
+
+
+        setDeltaMovement(movement);
 
         move(
                 MoverType.SELF,
-                velocity
+                movement
         );
 
         hurtMarked = true;
     }
 
-    // -------------------------------------------------------------------------
-    // COLLISION FILTER
-    // -------------------------------------------------------------------------
 
-    private boolean canHitEntity(Entity entity) {
+    // =========================================================================
+    // COLLISION FILTER
+    // =========================================================================
+
+    private boolean canHitEntity(
+            Entity entity
+    ) {
+
         if (entity == this) {
             return false;
         }
@@ -1041,370 +1550,333 @@ public class HeavyCoreEntity extends Entity {
             return false;
         }
 
-        /*
-         * Spectators shouldn't be hookable.
-         */
-        if (entity instanceof Player player && player.isSpectator()) {
+        if (
+                entity instanceof Player player
+                        && player.isSpectator()
+        ) {
             return false;
         }
 
         return entity.isPickable();
     }
 
-    // -------------------------------------------------------------------------
-    // RENDERER ACCESS
-    // -------------------------------------------------------------------------
 
-    /*
-     * Used by HeavyCoreRenderer.
-     *
-     * partialTick lets the renderer animate between game ticks.
-     */
-    public float getSpinAngle(float partialTick) {
-        if (!isCharging()) {
-            return spinAngle;
-        }
+    // =========================================================================
+    // SWING DAMAGE
+    // =========================================================================
 
-        float progress =
-                getChargeProgress();
-
-        float spinSpeed =
-                12.0F
-                        + (32.0F * progress);
-
-        return spinAngle
-                + spinSpeed * partialTick;
-    }
-
-    // -------------------------------------------------------------------------
-    // SYNCHED DATA
-    // -------------------------------------------------------------------------
-
-    @Override
-    protected void defineSynchedData(
-            SynchedEntityData.Builder builder
+    private void tickSwingDamage(
+            Player owner
     ) {
-        builder.define(
-                DATA_STATE,
-                State.READY.ordinal()
-        );
 
-        builder.define(
-                DATA_OWNER,
-                ""
-        );
-
-        builder.define(
-                DATA_HOOKED_ENTITY,
-                ""
-        );
-
-        builder.define(
-                DATA_REVERSE_PULL,
-                false
-        );
-
-        builder.define(
-                DATA_LEFT_HAND,
-                false
-        );
-    }
-
-    // -------------------------------------------------------------------------
-    // SAVE / LOAD
-    // -------------------------------------------------------------------------
-
-    @Override
-    protected void addAdditionalSaveData(
-            ValueOutput output
-    ) {
-        if (ownerUuid != null) {
-            output.putString(
-                    "Owner",
-                    ownerUuid.toString()
-            );
-        }
-
-        output.putInt(
-                "State",
-                getState().ordinal()
-        );
-
-        output.putBoolean(
-                "ReversePull",
-                entityData.get(DATA_REVERSE_PULL)
-        );
-    }
-
-    @Override
-    protected void readAdditionalSaveData(
-            ValueInput input
-    ) {
-        input.getString("Owner").ifPresent(owner -> {
-            try {
-                ownerUuid = UUID.fromString(owner);
-
-                entityData.set(
-                        DATA_OWNER,
-                        owner
-                );
-            } catch (IllegalArgumentException ignored) {
-                ownerUuid = null;
-
-                entityData.set(
-                        DATA_OWNER,
-                        ""
-                );
-            }
-        });
-
-        int stateId =
-                input.getInt("State")
-                        .orElse(State.READY.ordinal());
-
-        if (
-                stateId >= 0
-                        && stateId < State.values().length
-        ) {
-            setState(
-                    State.values()[stateId]
-            );
-        } else {
-            setState(State.READY);
-        }
-
-        boolean reversePull = input.read(
-                "ReversePull",
-                Codec.BOOL
-        ).orElse(false);
-    }
-
-    // -------------------------------------------------------------------------
-    // SIZE
-    // -------------------------------------------------------------------------
-
-    @Override
-    public EntityDimensions getDimensions(
-            Pose pose
-    ) {
-        return EntityDimensions.fixed(
-                1.0F,
-                1.0F
-        );
-    }
-
-    public float getWobblePitch() {
-        return wobblePitch;
-    }
-
-    public float getWobbleRoll() {
-        return wobbleRoll;
-    }
-
-    private void updateWobble(Vec3 referenceAxis) {
-        Vec3 movement =
-                position()
-                        .subtract(lastClientPosition);
-
-        Vec3 acceleration =
-                movement.subtract(lastClientVelocity);
-
-        /*
-         * The wobble reacts to sudden changes in movement,
-         * rather than simply pointing at the direction of travel.
-         *
-         * This gives it a little "mass on a chain" feeling.
-         */
-        Vec3 axis = referenceAxis;
-
-        if (axis.lengthSqr() < 1.0E-6D) {
-            axis = new Vec3(0.0D, 0.0D, 1.0D);
-        } else {
-            axis = axis.normalize();
-        }
-
-        Vec3 worldUp = new Vec3(
-                0.0D,
-                1.0D,
-                0.0D
-        );
-
-        Vec3 right =
-                axis.cross(worldUp);
-
-        /*
-         * If the axis is nearly vertical, choose another basis.
-         */
-        if (right.lengthSqr() < 1.0E-6D) {
-            right = new Vec3(
-                    1.0D,
-                    0.0D,
-                    0.0D
-            );
-        } else {
-            right = right.normalize();
-        }
-
-        Vec3 up =
-                right.cross(axis).normalize();
-
-        /*
-         * Convert acceleration into the flail's local axes.
-         */
-        double pitchTarget =
-                acceleration.dot(up) * 260.0D;
-
-        double rollTarget =
-                acceleration.dot(right) * 260.0D;
-
-        pitchTarget = Math.max(
-                -18.0D,
-                Math.min(
-                        18.0D,
-                        pitchTarget
-                )
-        );
-
-        rollTarget = Math.max(
-                -18.0D,
-                Math.min(
-                        18.0D,
-                        rollTarget
-                )
-        );
-
-        /*
-         * Spring.
-         */
-        wobblePitchVelocity +=
-                (float) (pitchTarget - wobblePitch)
-                        * 0.18F;
-
-        wobbleRollVelocity +=
-                (float) (rollTarget - wobbleRoll)
-                        * 0.18F;
-
-        /*
-         * Damping.
-         */
-        wobblePitchVelocity *= 0.80F;
-        wobbleRollVelocity *= 0.80F;
-
-        wobblePitch += wobblePitchVelocity;
-        wobbleRoll += wobbleRollVelocity;
-
-        /*
-         * Prevent tiny numerical oscillations from lasting forever.
-         */
-        wobblePitch *= 0.985F;
-        wobbleRoll *= 0.985F;
-
-        lastClientPosition = position();
-        lastClientVelocity = movement;
-    }
-
-    private void tickSwingDamage(Player owner) {
-        /*
-         * Count down existing hit cooldowns.
-         */
         swingHitCooldowns.replaceAll(
-                (uuid, cooldown) -> cooldown - 1
+                (uuid, cooldown) ->
+                        cooldown - 1
         );
 
-        swingHitCooldowns.entrySet().removeIf(
-                entry -> entry.getValue() <= 0
-        );
 
-        /*
-         * Look for entities close to the core.
-         *
-         * The extra inflation gives the Heavy Core a little
-         * "meat" to its hitbox so it doesn't need pixel-perfect
-         * contact.
-         */
-        for (Entity target : level().getEntities(
-                this,
-                getBoundingBox().inflate(0.35D),
-                this::canHitEntity
-        )) {
+        swingHitCooldowns.entrySet()
+                .removeIf(
+                        entry ->
+                                entry.getValue()
+                                        <= 0
+                );
+
+
+        for (
+                Entity target :
+                level().getEntities(
+                        this,
+                        getBoundingBox()
+                                .inflate(0.35D),
+                        this::canHitEntity
+                )
+        ) {
 
             if (target == owner) {
                 continue;
             }
 
-            if (swingHitCooldowns.containsKey(target.getUUID())) {
+
+            if (
+                    swingHitCooldowns
+                            .containsKey(
+                                    target.getUUID()
+                            )
+            ) {
                 continue;
             }
 
-            /*
-             * Damage the target.
-             */
+
             target.hurt(
-                    owner.damageSources().playerAttack(owner),
+                    owner.damageSources()
+                            .playerAttack(owner),
                     SWING_DAMAGE
             );
 
-            /*
-             * Prevent the same target from being hit again
-             * for a few ticks.
-             */
+
             swingHitCooldowns.put(
                     target.getUUID(),
                     SWING_HIT_COOLDOWN
             );
         }
     }
-    private Vec3 getHandPosition(Player player) {
-        float yaw = player.getYRot();
-        double yawRadians = Math.toRadians(yaw);
 
-        /*
-         * Player's horizontal forward direction.
-         */
-        Vec3 forward = new Vec3(
-                -Math.sin(yawRadians),
-                0.0D,
-                Math.cos(yawRadians)
+
+    // =========================================================================
+    // RENDERER ACCESS
+    // =========================================================================
+
+    public float getSpinAngle(
+            float partialTick
+    ) {
+
+        if (!isCharging()) {
+            return spinAngle;
+        }
+
+
+        float progress =
+                getChargeProgress();
+
+
+        float spinSpeed =
+                VISUAL_SPIN_START
+                        + (
+                        VISUAL_SPIN_GROWTH
+                                * progress
+                );
+
+
+        return spinAngle
+                + (
+                spinSpeed
+                        * partialTick
         );
+    }
 
-        /*
-         * Player's horizontal right direction.
-         */
-        Vec3 right = new Vec3(
-                Math.cos(yawRadians),
-                0.0D,
-                Math.sin(yawRadians)
-        );
 
-        /*
-         * Which arm is holding the flail.
-         */
-        boolean leftHand = isLeftHand();
+    public float getWobblePitch() {
+        return wobblePitch;
+    }
+
+
+    public float getWobbleRoll() {
+        return wobbleRoll;
+    }
+
+
+    // =========================================================================
+    // WOBBLE
+    // =========================================================================
+
+    private void updateWobble(
+            Vec3 referenceAxis
+    ) {
+
+        Vec3 movement =
+                position()
+                        .subtract(
+                                lastClientPosition
+                        );
+
+
+        Vec3 acceleration =
+                movement.subtract(
+                        lastClientVelocity
+                );
+
+
+        Vec3 axis =
+                referenceAxis;
+
+
+        if (axis.lengthSqr() < 1.0E-6D) {
+            axis =
+                    new Vec3(
+                            0.0D,
+                            0.0D,
+                            1.0D
+                    );
+        } else {
+            axis =
+                    axis.normalize();
+        }
+
+
+        Vec3 worldUp =
+                new Vec3(
+                        0.0D,
+                        1.0D,
+                        0.0D
+                );
+
+
+        Vec3 right =
+                axis.cross(worldUp);
+
+
+        if (right.lengthSqr() < 1.0E-6D) {
+            right =
+                    new Vec3(
+                            1.0D,
+                            0.0D,
+                            0.0D
+                    );
+        } else {
+            right =
+                    right.normalize();
+        }
+
+
+        Vec3 up =
+                right.cross(axis);
+
+
+        if (up.lengthSqr() < 1.0E-6D) {
+            up =
+                    new Vec3(
+                            0.0D,
+                            1.0D,
+                            0.0D
+                    );
+        } else {
+            up =
+                    up.normalize();
+        }
+
+
+        double pitchTarget =
+                acceleration.dot(up)
+                        * WOBBLE_ACCELERATION_SCALE;
+
+
+        double rollTarget =
+                acceleration.dot(right)
+                        * WOBBLE_ACCELERATION_SCALE;
+
+
+        pitchTarget =
+                Math.max(
+                        -WOBBLE_MAX_ANGLE,
+                        Math.min(
+                                WOBBLE_MAX_ANGLE,
+                                pitchTarget
+                        )
+                );
+
+
+        rollTarget =
+                Math.max(
+                        -WOBBLE_MAX_ANGLE,
+                        Math.min(
+                                WOBBLE_MAX_ANGLE,
+                                rollTarget
+                        )
+                );
+
+
+        wobblePitchVelocity +=
+                (
+                        (float) pitchTarget
+                                - wobblePitch
+                ) * WOBBLE_SPRING;
+
+
+        wobbleRollVelocity +=
+                (
+                        (float) rollTarget
+                                - wobbleRoll
+                ) * WOBBLE_SPRING;
+
+
+        wobblePitchVelocity *=
+                WOBBLE_DAMPING;
+
+        wobbleRollVelocity *=
+                WOBBLE_DAMPING;
+
+
+        wobblePitch +=
+                wobblePitchVelocity;
+
+        wobbleRoll +=
+                wobbleRollVelocity;
+
+
+        wobblePitch *=
+                WOBBLE_SETTLE;
+
+        wobbleRoll *=
+                WOBBLE_SETTLE;
+
+
+        lastClientPosition =
+                position();
+
+        lastClientVelocity =
+                movement;
+    }
+
+
+    // =========================================================================
+    // HAND POSITION
+    // =========================================================================
+
+    private Vec3 getHandPosition(
+            Player player
+    ) {
+
+        float yaw =
+                player.getYRot();
+
+
+        double yawRadians =
+                Math.toRadians(yaw);
+
+
+        Vec3 forward =
+                new Vec3(
+                        -Math.sin(yawRadians),
+                        0.0D,
+                        Math.cos(yawRadians)
+                );
+
+
+        Vec3 right =
+                new Vec3(
+                        Math.cos(yawRadians),
+                        0.0D,
+                        Math.sin(yawRadians)
+                );
+
+
+        boolean leftHand =
+                isLeftHand();
+
 
         double sideOffset =
                 leftHand
-                        ? -0.32D
-                        : 0.32D;
+                        ? -HAND_SIDE_OFFSET
+                        : HAND_SIDE_OFFSET;
 
-        /*
-         * Slightly forward from the shoulder/torso.
-         */
-        double forwardOffset = 0.28D;
 
-        /*
-         * Approximate hand height.
-         */
         double handHeight =
                 player.isCrouching()
-                        ? 0.95D
-                        : 1.15D;
+                        ? HAND_HEIGHT_CROUCHING
+                        : HAND_HEIGHT_STANDING;
+
 
         return player.position()
                 .add(
-                        right.scale(sideOffset)
+                        right.scale(
+                                sideOffset
+                        )
                 )
                 .add(
-                        forward.scale(forwardOffset)
+                        forward.scale(
+                                HAND_FORWARD_OFFSET
+                        )
                 )
                 .add(
                         0.0D,
@@ -1413,26 +1885,190 @@ public class HeavyCoreEntity extends Entity {
                 );
     }
 
+
     public boolean isLeftHand() {
-        return entityData.get(DATA_LEFT_HAND);
+        return entityData.get(
+                DATA_LEFT_HAND
+        );
     }
 
-    public UUID getOwnerUuid() {
+
+    // =========================================================================
+    // SYNCHED DATA
+    // =========================================================================
+
+    @Override
+    protected void defineSynchedData(
+            SynchedEntityData.Builder builder
+    ) {
+
+        builder.define(
+                DATA_STATE,
+                State.READY.ordinal()
+        );
+
+
+        builder.define(
+                DATA_OWNER,
+                ""
+        );
+
+
+        builder.define(
+                DATA_HOOKED_ENTITY,
+                ""
+        );
+
+
+        builder.define(
+                DATA_REVERSE_PULL,
+                false
+        );
+
+
+        builder.define(
+                DATA_LEFT_HAND,
+                false
+        );
+    }
+
+
+    // =========================================================================
+    // SAVE / LOAD
+    // =========================================================================
+
+    @Override
+    protected void addAdditionalSaveData(
+            ValueOutput output
+    ) {
+
         if (ownerUuid != null) {
-            return ownerUuid;
+            output.putString(
+                    "Owner",
+                    ownerUuid.toString()
+            );
         }
 
-        String value =
-                entityData.get(DATA_OWNER);
 
-        if (value == null || value.isEmpty()) {
-            return null;
+        output.putInt(
+                "State",
+                getState().ordinal()
+        );
+
+
+        output.putBoolean(
+                "ReversePull",
+                entityData.get(
+                        DATA_REVERSE_PULL
+                )
+        );
+
+
+        output.putBoolean(
+                "LeftHand",
+                entityData.get(
+                        DATA_LEFT_HAND
+                )
+        );
+    }
+
+
+    @Override
+    protected void readAdditionalSaveData(
+            ValueInput input
+    ) {
+
+        input.getString("Owner")
+                .ifPresent(
+                        owner -> {
+                            try {
+
+                                ownerUuid =
+                                        UUID.fromString(
+                                                owner
+                                        );
+
+                                entityData.set(
+                                        DATA_OWNER,
+                                        owner
+                                );
+
+                            } catch (
+                                    IllegalArgumentException ignored
+                            ) {
+
+                                ownerUuid = null;
+
+                                entityData.set(
+                                        DATA_OWNER,
+                                        ""
+                                );
+                            }
+                        }
+                );
+
+
+        int stateId =
+                input.getInt("State")
+                        .orElse(
+                                State.READY.ordinal()
+                        );
+
+
+        if (
+                stateId >= 0
+                        && stateId
+                        < State.values().length
+        ) {
+
+            setState(
+                    State.values()[stateId]
+            );
+
+        } else {
+
+            setState(State.READY);
         }
 
-        try {
-            return UUID.fromString(value);
-        } catch (IllegalArgumentException ignored) {
-            return null;
-        }
+
+        boolean reversePull =
+                input.read(
+                        "ReversePull",
+                        Codec.BOOL
+                ).orElse(false);
+
+
+        entityData.set(
+                DATA_REVERSE_PULL,
+                reversePull
+        );
+
+
+        boolean leftHand =
+                input.read(
+                        "LeftHand",
+                        Codec.BOOL
+                ).orElse(false);
+
+
+        entityData.set(
+                DATA_LEFT_HAND,
+                leftHand
+        );
+    }
+
+
+    // =========================================================================
+    // SIZE
+    // =========================================================================
+
+    @Override
+    public EntityDimensions getDimensions(
+            Pose pose
+    ) {
+        return EntityDimensions.fixed(
+                0.5F,
+                0.5F
+        );
     }
 }

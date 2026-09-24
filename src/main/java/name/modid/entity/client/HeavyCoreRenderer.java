@@ -1,3 +1,4 @@
+
 package name.modid.entity.client;
 
 import name.modid.entity.custom.HeavyCoreEntity;
@@ -15,8 +16,6 @@ import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
@@ -33,6 +32,12 @@ public class HeavyCoreRenderer
 
     private static final double CHAIN_LINK_SPACING = 0.24D;
     private static final float CHAIN_SCALE = 0.42F;
+
+    /*
+     * Rendered size of the Heavy Core projectile.
+     * The model stays centered on the entity while shrinking.
+     */
+    private static final float PROJECTILE_SCALE = 0.60F;
 
     private final BlockModelResolver blockModelResolver;
 
@@ -126,9 +131,23 @@ public class HeavyCoreRenderer
              *
              * Store the hand relative to the core.
              */
+            /*
+             * Use the same interpolated origin that EntityRenderer extracted
+             * for this frame. The entity itself may have been moved by the
+             * server since the last full tick, so subtracting entity.position()
+             * here can make the chain slide or jump relative to the rendered
+             * core.
+             */
+            Vec3 renderOrigin =
+                    new Vec3(
+                            state.x,
+                            state.y,
+                            state.z
+                    );
+
             Vec3 relative =
                     handPosition.subtract(
-                            entity.position()
+                            renderOrigin
                     );
 
             state.chainEndX =
@@ -204,6 +223,16 @@ public class HeavyCoreRenderer
                 Axis.ZP.rotationDegrees(
                         state.wobbleRoll
                 )
+        );
+
+        /*
+         * Keep the projectile centered while making the
+         * rendered Heavy Core smaller.
+         */
+        poseStack.scale(
+                PROJECTILE_SCALE,
+                PROJECTILE_SCALE,
+                PROJECTILE_SCALE
         );
 
         /*

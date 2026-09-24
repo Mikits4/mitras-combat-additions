@@ -86,7 +86,7 @@ public class FlailItem extends Item {
         target.addEffect(
                 new MobEffectInstance(
                         ModEffects.BLEED,
-                        200,
+                        20,
                         amplifier
                 ),
                 attacker

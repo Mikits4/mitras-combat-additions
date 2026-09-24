@@ -28,8 +28,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class FlailItem extends Item {
 
-    private static final int DEFAULT_ATTACK_DAMAGE = 5;
-    private static final float DEFAULT_ATTACK_SPEED = -2.4F;
+    private static final int DEFAULT_ATTACK_DAMAGE = 4;
+    private static final float DEFAULT_ATTACK_SPEED = -1.8F;
 
     private static final Map<UUID, FlailState> ACTIVE_FLAILS =
             new ConcurrentHashMap<>();

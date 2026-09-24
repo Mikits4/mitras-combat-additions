@@ -1,9 +1,13 @@
 package name.modid;
 
 import name.modid.effect.ModEffects;
+import name.modid.entity.ModEntities;
+import name.modid.entity.client.HeavyCoreEntityRenderer;
+import name.modid.entity.client.HeavyCoreRenderer;
 import name.modid.item.ModItems;
 import net.fabricmc.api.ModInitializer;
 
+import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.minecraft.resources.Identifier;
 
 import org.slf4j.Logger;
@@ -18,6 +22,11 @@ public class MitraSCombatAdditions implements ModInitializer {
 	public void onInitialize() {
 		ModEffects.registerModEffects();
 		ModItems.registerModItems();
+
+		EntityRendererRegistry.register(
+				ModEntities.HEAVY_CORE_ENTITY,
+				HeavyCoreRenderer::new
+		);
 
 		LOGGER.info("Hello Fabric world!");
 	}

@@ -5,6 +5,7 @@ import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.*;
 import net.minecraft.world.entity.player.Player;
@@ -22,42 +23,6 @@ import java.util.UUID;
 public class HeavyCoreEntity extends Entity {
     private static final double GRAPPLE_LIFT = 0.45D;
     private static final double ENTITY_PULL_LIFT = 0.18D;
-
-    private enum State {
-        READY,
-        CHARGING,
-        FLYING,
-        HOOKED,
-        RETURNING
-    }
-
-    private static final EntityDataAccessor<Integer> DATA_STATE =
-            SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
-                    EntityDataSerializers.INT
-            );
-
-    private static final EntityDataAccessor<String> DATA_OWNER =
-            SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
-                    EntityDataSerializers.STRING
-            );
-
-    private static final EntityDataAccessor<String> DATA_HOOKED_ENTITY =
-            SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
-                    EntityDataSerializers.STRING
-            );
-
-    /*
-     * true = crouching/fishing-rod mode
-     * false = standing/grapple mode
-     */
-    private static final EntityDataAccessor<Boolean> DATA_REVERSE_PULL =
-            SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
-                    EntityDataSerializers.BOOLEAN
-            );
 
     /*
      * How long a throw can remain in the air.
@@ -96,12 +61,12 @@ public class HeavyCoreEntity extends Entity {
      *
      * Vanilla fishing-hook pulling is roughly around 0.1 per tick.
      */
-    private static final double ENTITY_PULL_STRENGTH = 0.32D;
+    private static final double ENTITY_PULL_STRENGTH = 0.40D;
 
     /*
      * Player grapple acceleration.
      */
-    private static final double GRAPPLE_STRENGTH = 0.20D;
+    private static final double GRAPPLE_STRENGTH = 0.40D;
 
     /*
      * Maximum speed while being grappled.
@@ -127,6 +92,67 @@ public class HeavyCoreEntity extends Entity {
      * Renderer can interpolate it every frame.
      */
     private float spinAngle = 0.0F;
+
+    private float wobblePitch = 0.0F;
+    private float wobbleRoll = 0.0F;
+
+    private float wobblePitchVelocity = 0.0F;
+    private float wobbleRollVelocity = 0.0F;
+
+    private static final float SWING_DAMAGE = 5.0F;
+    private static final float THROW_DAMAGE = 6.0F;
+
+    private static final int SWING_HIT_COOLDOWN = 5;
+
+    private final java.util.Map<UUID, Integer> swingHitCooldowns =
+            new java.util.HashMap<>();
+
+    private Vec3 lastClientPosition = Vec3.ZERO;
+    private Vec3 lastClientVelocity = Vec3.ZERO;
+
+    private enum State {
+        READY,
+        CHARGING,
+        FLYING,
+        HOOKED,
+        RETURNING
+    }
+
+    private static final EntityDataAccessor<Integer> DATA_STATE =
+            SynchedEntityData.defineId(
+                    HeavyCoreEntity.class,
+                    EntityDataSerializers.INT
+            );
+
+    private static final EntityDataAccessor<String> DATA_OWNER =
+            SynchedEntityData.defineId(
+                    HeavyCoreEntity.class,
+                    EntityDataSerializers.STRING
+            );
+
+    private static final EntityDataAccessor<String> DATA_HOOKED_ENTITY =
+            SynchedEntityData.defineId(
+                    HeavyCoreEntity.class,
+                    EntityDataSerializers.STRING
+            );
+
+    /*
+     * true = crouching/fishing-rod mode
+     * false = standing/grapple mode
+     */
+    private static final EntityDataAccessor<Boolean> DATA_REVERSE_PULL =
+            SynchedEntityData.defineId(
+                    HeavyCoreEntity.class,
+                    EntityDataSerializers.BOOLEAN
+            );
+
+    private static final EntityDataAccessor<Boolean> DATA_LEFT_HAND =
+            SynchedEntityData.defineId(
+                    HeavyCoreEntity.class,
+                    EntityDataSerializers.BOOLEAN
+            );
+
+
 
     public HeavyCoreEntity(
             EntityType<? extends HeavyCoreEntity> type,
@@ -181,12 +207,25 @@ public class HeavyCoreEntity extends Entity {
     // OWNER
     // -------------------------------------------------------------------------
 
-    public void setOwner(Player player) {
+    public void setOwner(
+            Player player,
+            InteractionHand hand
+    ) {
         ownerUuid = player.getUUID();
 
         entityData.set(
                 DATA_OWNER,
                 player.getUUID().toString()
+        );
+
+        boolean leftHand =
+                hand == InteractionHand.OFF_HAND
+                        ? player.getMainArm() == HumanoidArm.RIGHT
+                        : player.getMainArm() == HumanoidArm.LEFT;
+
+        entityData.set(
+                DATA_LEFT_HAND,
+                leftHand
         );
     }
 
@@ -346,10 +385,7 @@ public class HeavyCoreEntity extends Entity {
 
         if (state == State.CHARGING) {
             tickCharging(owner);
-            return;
-        }
-
-        if (state == State.FLYING) {
+        } else if (state == State.FLYING) {
             move(
                     MoverType.SELF,
                     getDeltaMovement()
@@ -359,11 +395,7 @@ public class HeavyCoreEntity extends Entity {
                     getDeltaMovement()
                             .scale(0.99D)
             );
-
-            return;
-        }
-
-        if (state == State.HOOKED) {
+        } else if (state == State.HOOKED) {
             Entity target = getHookedEntity();
 
             if (target != null && target.isAlive()) {
@@ -377,13 +409,29 @@ public class HeavyCoreEntity extends Entity {
                         center.z
                 );
             }
-
-            return;
-        }
-
-        if (state == State.RETURNING) {
+        } else if (state == State.RETURNING) {
             tickReturning(owner);
         }
+
+        /*
+         * Use the current movement direction as the wobble reference.
+         *
+         * During charging the head direction becomes the reference,
+         * so the wobble/orientation follows the player's view.
+         */
+        Vec3 referenceAxis;
+
+        if (state == State.CHARGING) {
+            referenceAxis = owner.getLookAngle();
+        } else {
+            referenceAxis = getDeltaMovement();
+
+            if (referenceAxis.lengthSqr() < 1.0E-6D) {
+                referenceAxis = owner.getLookAngle();
+            }
+        }
+
+        updateWobble(referenceAxis);
     }
 
     // -------------------------------------------------------------------------
@@ -418,7 +466,7 @@ public class HeavyCoreEntity extends Entity {
         float progress = getChargeProgress();
 
         /*
-         * The longer you hold, the faster it spins around you.
+         * The orbit gets faster as the flail is wound up.
          */
         double orbitSpeed =
                 0.16D
@@ -431,15 +479,14 @@ public class HeavyCoreEntity extends Entity {
         }
 
         /*
-         * Calculate horizontal forward direction.
+         * ---------------------------------------------------------
+         * PLAYER HEAD DIRECTION
+         * ---------------------------------------------------------
+         *
+         * This is the direction the player is looking.
+         * We want pitch to affect the plane of the wind-up.
          */
-        Vec3 look = owner.getLookAngle();
-
-        Vec3 forward = new Vec3(
-                look.x,
-                0.0D,
-                look.z
-        );
+        Vec3 forward = owner.getLookAngle();
 
         if (forward.lengthSqr() < 1.0E-6D) {
             forward = new Vec3(
@@ -452,43 +499,84 @@ public class HeavyCoreEntity extends Entity {
         }
 
         /*
-         * Perpendicular horizontal direction.
+         * Horizontal right vector based on the player's yaw.
+         *
+         * Unlike forward, this remains horizontal.
          */
+        float yaw = owner.getYRot();
+        double yawRadians = Math.toRadians(yaw);
+
         Vec3 right = new Vec3(
-                -forward.z,
+                Math.cos(yawRadians),
                 0.0D,
-                forward.x
-        );
+                Math.sin(yawRadians)
+        ).normalize();
 
         /*
-         * Orbit radius slightly increases with charge.
+         * Create a vector perpendicular to both right and forward.
+         *
+         * At normal head pitch this is approximately world-up.
+         *
+         * Looking upward/downward tilts this vector accordingly.
+         */
+        Vec3 up =
+                forward.cross(right);
+
+        if (up.lengthSqr() < 1.0E-6D) {
+            up = new Vec3(
+                    0.0D,
+                    1.0D,
+                    0.0D
+            );
+        } else {
+            up = up.normalize();
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * ORBIT
+         * ---------------------------------------------------------
+         *
+         * The orbit plane is made from:
+         *
+         *     forward + up
+         *
+         * with right as the plane's normal.
+         *
+         * That means:
+         *
+         *   look straight ahead → vertical-ish wind-up
+         *   look upward         → wind-up pitches upward
+         *   look downward       → wind-up pitches downward
          */
         double radius =
                 1.85D
                         + (0.55D * progress);
 
-        Vec3 offset =
+        Vec3 orbitOffset =
                 forward.scale(
-                        Math.cos(orbitAngle)
-                                * radius
+                        Math.cos(orbitAngle) * radius
                 ).add(
-                        right.scale(
-                                Math.sin(orbitAngle)
-                                        * radius
+                        up.scale(
+                                Math.sin(orbitAngle) * radius
                         )
                 );
 
-        Vec3 target =
-                owner.getEyePosition()
-                        .add(offset);
 
         /*
-         * We deliberately use setPos here instead of setting
-         * velocity. Charging is controlled positioning.
+         * ---------------------------------------------------------
+         * HAND CENTER
+         * ---------------------------------------------------------
          *
-         * It runs on BOTH client and server, which makes the
-         * movement visually smooth instead of server-teleported.
+         * The flail now swings around the player's hand,
+         * not around their head.
          */
+        Vec3 handPosition =
+                getHandPosition(owner);
+
+        Vec3 target =
+                handPosition.add(orbitOffset);
+
         setPos(
                 target.x,
                 target.y,
@@ -498,7 +586,7 @@ public class HeavyCoreEntity extends Entity {
         setDeltaMovement(Vec3.ZERO);
 
         /*
-         * Visual spin becomes faster as charge increases.
+         * Visual spin.
          */
         float spinSpeed =
                 12.0F
@@ -622,19 +710,22 @@ public class HeavyCoreEntity extends Entity {
         Vec3 targetCenter =
                 target.getBoundingBox().getCenter();
 
+
+        if (target instanceof LivingEntity livingTarget) {
+            livingTarget.hurt(
+                    owner.damageSources().playerAttack(owner),
+                    5.0F
+            );
+        }
+
         /*
          * ---------------------------------------------------------
          * CROUCHING = FISHING ROD MODE
          * ---------------------------------------------------------
          */
-        if (reversePull) {
 
-            if (target instanceof LivingEntity livingTarget) {
-                livingTarget.hurt(
-                        owner.damageSources().playerAttack(owner),
-                        5.0F
-                );
-            }
+
+        if (reversePull) {
 
             // Pull starts immediately.
             pullEntityTowardPlayer(
@@ -1012,6 +1103,11 @@ public class HeavyCoreEntity extends Entity {
                 DATA_REVERSE_PULL,
                 false
         );
+
+        builder.define(
+                DATA_LEFT_HAND,
+                false
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -1095,5 +1191,248 @@ public class HeavyCoreEntity extends Entity {
                 1.0F,
                 1.0F
         );
+    }
+
+    public float getWobblePitch() {
+        return wobblePitch;
+    }
+
+    public float getWobbleRoll() {
+        return wobbleRoll;
+    }
+
+    private void updateWobble(Vec3 referenceAxis) {
+        Vec3 movement =
+                position()
+                        .subtract(lastClientPosition);
+
+        Vec3 acceleration =
+                movement.subtract(lastClientVelocity);
+
+        /*
+         * The wobble reacts to sudden changes in movement,
+         * rather than simply pointing at the direction of travel.
+         *
+         * This gives it a little "mass on a chain" feeling.
+         */
+        Vec3 axis = referenceAxis;
+
+        if (axis.lengthSqr() < 1.0E-6D) {
+            axis = new Vec3(0.0D, 0.0D, 1.0D);
+        } else {
+            axis = axis.normalize();
+        }
+
+        Vec3 worldUp = new Vec3(
+                0.0D,
+                1.0D,
+                0.0D
+        );
+
+        Vec3 right =
+                axis.cross(worldUp);
+
+        /*
+         * If the axis is nearly vertical, choose another basis.
+         */
+        if (right.lengthSqr() < 1.0E-6D) {
+            right = new Vec3(
+                    1.0D,
+                    0.0D,
+                    0.0D
+            );
+        } else {
+            right = right.normalize();
+        }
+
+        Vec3 up =
+                right.cross(axis).normalize();
+
+        /*
+         * Convert acceleration into the flail's local axes.
+         */
+        double pitchTarget =
+                acceleration.dot(up) * 260.0D;
+
+        double rollTarget =
+                acceleration.dot(right) * 260.0D;
+
+        pitchTarget = Math.max(
+                -18.0D,
+                Math.min(
+                        18.0D,
+                        pitchTarget
+                )
+        );
+
+        rollTarget = Math.max(
+                -18.0D,
+                Math.min(
+                        18.0D,
+                        rollTarget
+                )
+        );
+
+        /*
+         * Spring.
+         */
+        wobblePitchVelocity +=
+                (float) (pitchTarget - wobblePitch)
+                        * 0.18F;
+
+        wobbleRollVelocity +=
+                (float) (rollTarget - wobbleRoll)
+                        * 0.18F;
+
+        /*
+         * Damping.
+         */
+        wobblePitchVelocity *= 0.80F;
+        wobbleRollVelocity *= 0.80F;
+
+        wobblePitch += wobblePitchVelocity;
+        wobbleRoll += wobbleRollVelocity;
+
+        /*
+         * Prevent tiny numerical oscillations from lasting forever.
+         */
+        wobblePitch *= 0.985F;
+        wobbleRoll *= 0.985F;
+
+        lastClientPosition = position();
+        lastClientVelocity = movement;
+    }
+
+    private void tickSwingDamage(Player owner) {
+        /*
+         * Count down existing hit cooldowns.
+         */
+        swingHitCooldowns.replaceAll(
+                (uuid, cooldown) -> cooldown - 1
+        );
+
+        swingHitCooldowns.entrySet().removeIf(
+                entry -> entry.getValue() <= 0
+        );
+
+        /*
+         * Look for entities close to the core.
+         *
+         * The extra inflation gives the Heavy Core a little
+         * "meat" to its hitbox so it doesn't need pixel-perfect
+         * contact.
+         */
+        for (Entity target : level().getEntities(
+                this,
+                getBoundingBox().inflate(0.35D),
+                this::canHitEntity
+        )) {
+
+            if (target == owner) {
+                continue;
+            }
+
+            if (swingHitCooldowns.containsKey(target.getUUID())) {
+                continue;
+            }
+
+            /*
+             * Damage the target.
+             */
+            target.hurt(
+                    owner.damageSources().playerAttack(owner),
+                    SWING_DAMAGE
+            );
+
+            /*
+             * Prevent the same target from being hit again
+             * for a few ticks.
+             */
+            swingHitCooldowns.put(
+                    target.getUUID(),
+                    SWING_HIT_COOLDOWN
+            );
+        }
+    }
+    private Vec3 getHandPosition(Player player) {
+        float yaw = player.getYRot();
+        double yawRadians = Math.toRadians(yaw);
+
+        /*
+         * Player's horizontal forward direction.
+         */
+        Vec3 forward = new Vec3(
+                -Math.sin(yawRadians),
+                0.0D,
+                Math.cos(yawRadians)
+        );
+
+        /*
+         * Player's horizontal right direction.
+         */
+        Vec3 right = new Vec3(
+                Math.cos(yawRadians),
+                0.0D,
+                Math.sin(yawRadians)
+        );
+
+        /*
+         * Which arm is holding the flail.
+         */
+        boolean leftHand = isLeftHand();
+
+        double sideOffset =
+                leftHand
+                        ? -0.32D
+                        : 0.32D;
+
+        /*
+         * Slightly forward from the shoulder/torso.
+         */
+        double forwardOffset = 0.28D;
+
+        /*
+         * Approximate hand height.
+         */
+        double handHeight =
+                player.isCrouching()
+                        ? 0.95D
+                        : 1.15D;
+
+        return player.position()
+                .add(
+                        right.scale(sideOffset)
+                )
+                .add(
+                        forward.scale(forwardOffset)
+                )
+                .add(
+                        0.0D,
+                        handHeight,
+                        0.0D
+                );
+    }
+
+    public boolean isLeftHand() {
+        return entityData.get(DATA_LEFT_HAND);
+    }
+
+    public UUID getOwnerUuid() {
+        if (ownerUuid != null) {
+            return ownerUuid;
+        }
+
+        String value =
+                entityData.get(DATA_OWNER);
+
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 }

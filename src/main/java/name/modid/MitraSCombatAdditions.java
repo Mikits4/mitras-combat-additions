@@ -2,7 +2,6 @@ package name.modid;
 
 import name.modid.effect.ModEffects;
 import name.modid.entity.ModEntities;
-import name.modid.entity.client.HeavyCoreEntityRenderer;
 import name.modid.entity.client.HeavyCoreRenderer;
 import name.modid.item.ModItems;
 import net.fabricmc.api.ModInitializer;

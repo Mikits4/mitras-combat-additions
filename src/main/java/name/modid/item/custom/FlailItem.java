@@ -141,7 +141,8 @@ public class FlailItem extends Item {
                     serverLevel
             );
 
-            core.setOwner(player);
+            core.setOwner(player, hand);
+            core.startCharging();
 
             serverLevel.addFreshEntity(core);
 

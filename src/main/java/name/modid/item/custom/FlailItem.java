@@ -10,8 +10,8 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.entity.EquipmentSlotGroup;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlotGroup;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -30,39 +30,21 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FlailItem extends Item {
 
     // =========================================================================
-    // TUNING
+    // YOUR ORIGINAL VALUES
     // =========================================================================
 
     /*
-     * Damage added by the flail's item attribute.
-     *
-     * Player base attack damage is separate from this value.
-     *
-     * Therefore:
-     *
-     *     5.0 modifier + 1.0 player base = 6.0 total
+     * KEEPING YOUR EXACT VALUES.
      */
-    private static final double DEFAULT_ATTACK_DAMAGE = 5.0D;
+    private static final int DEFAULT_ATTACK_DAMAGE = 5;
 
-    /*
-     * Vanilla sword-like final attack speed is 1.6.
-     *
-     * Player base attack speed = 4.0
-     *
-     *     4.0 + (-2.4) = 1.6
-     */
-    private static final double DEFAULT_ATTACK_SPEED = -2.2D;
+    private static final float DEFAULT_ATTACK_SPEED = -2.2F;
 
 
     // =========================================================================
     // ACTIVE FLAILS
     // =========================================================================
 
-    /*
-     * One active projectile state per player UUID.
-     *
-     * This is server-side state used to locate the player's HeavyCoreEntity.
-     */
     private static final Map<UUID, FlailState> ACTIVE_FLAILS =
             new ConcurrentHashMap<>();
 
@@ -78,11 +60,10 @@ public class FlailItem extends Item {
         /*
          * IMPORTANT:
          *
-         * This was the reason the damage and attack-speed values were
-         * not applying.
+         * This attaches createAttributes() to the actual item.
          *
-         * createAttributes() existed, but the resulting component was
-         * never attached to the item.
+         * Your previous version created the modifiers but never placed
+         * them into the item's Properties.
          */
         super(
                 properties.attributes(
@@ -101,9 +82,9 @@ public class FlailItem extends Item {
         return ItemAttributeModifiers.builder()
 
                 /*
-                 * ATTACK DAMAGE
+                 * YOUR DAMAGE VALUE:
                  *
-                 * This is an ADD_VALUE modifier.
+                 * +5 attack damage modifier.
                  */
                 .add(
                         Attributes.ATTACK_DAMAGE,
@@ -116,10 +97,11 @@ public class FlailItem extends Item {
                 )
 
                 /*
-                 * ATTACK SPEED
+                 * YOUR ATTACK SPEED VALUE:
                  *
-                 * -2.4 from the player's base 4.0
-                 * produces a final attack speed of 1.6.
+                 * -2.2 attack speed modifier.
+                 *
+                 * We are NOT changing it.
                  */
                 .add(
                         Attributes.ATTACK_SPEED,
@@ -170,7 +152,7 @@ public class FlailItem extends Item {
 
 
     // =========================================================================
-    // START CHARGING
+    // START / CONTINUE USING
     // =========================================================================
 
     @Override
@@ -181,21 +163,26 @@ public class FlailItem extends Item {
     ) {
 
         ItemStack stack =
-                player.getItemInHand(hand);
+                player.getItemInHand(
+                        hand
+                );
 
 
         /*
-         * Client accepts the use action.
-         *
-         * Actual projectile creation happens on the server.
+         * Client accepts the use.
+         * Server creates/controls the projectile.
          */
-        if (level.isClientSide()) {
+        if (
+                level.isClientSide()
+        ) {
 
             return InteractionResult.CONSUME;
         }
 
 
-        if (!(level instanceof ServerLevel serverLevel)) {
+        if (
+                !(level instanceof ServerLevel serverLevel)
+        ) {
 
             return InteractionResult.FAIL;
         }
@@ -213,11 +200,43 @@ public class FlailItem extends Item {
 
 
         HeavyCoreEntity core =
-                state.getCore(serverLevel);
+                state.getCore(
+                        serverLevel
+                );
 
 
         /*
-         * Clear stale projectile UUIDs.
+         * =============================================================
+         * TERRARIA-STYLE GROUNDED MODE
+         * =============================================================
+         *
+         * If the projectile is already flying and the player presses
+         * right click, convert it into the sagging/grounded flail.
+         */
+        if (
+                core != null
+                        && core.isAlive()
+                        && core.isFlying()
+        ) {
+
+            core.beginSagging();
+
+
+            /*
+             * Continue using the item so releaseUsing() fires when
+             * the player releases right click.
+             */
+            player.startUsingItem(
+                    hand
+            );
+
+
+            return InteractionResult.CONSUME;
+        }
+
+
+        /*
+         * Clear a stale projectile UUID.
          */
         if (
                 core == null
@@ -229,8 +248,8 @@ public class FlailItem extends Item {
 
 
         /*
-         * Don't allow a second projectile while the current one
-         * is charging, flying, hooked, or returning.
+         * Don't start a new charge while an existing projectile is
+         * charging, flying, hooked, sagging, or returning.
          */
         if (
                 core != null
@@ -242,9 +261,10 @@ public class FlailItem extends Item {
         }
 
 
-        /*
-         * Create a new Heavy Core when no active one exists.
-         */
+        // ---------------------------------------------------------------------
+        // CREATE NEW CORE
+        // ---------------------------------------------------------------------
+
         if (
                 core == null
                         || !core.isAlive()
@@ -257,9 +277,6 @@ public class FlailItem extends Item {
                     );
 
 
-            /*
-             * Set the owner BEFORE positioning the projectile.
-             */
             core.setOwner(
                     player,
                     hand
@@ -267,29 +284,21 @@ public class FlailItem extends Item {
 
 
             /*
-             * Start charging.
+             * Start charging before inserting the entity into the world.
              */
             core.startCharging();
 
 
             /*
              * =============================================================
-             * CRITICAL BUG FIX
+             * CRITICAL SPAWN-CHUNK FIX
              * =============================================================
              *
-             * The old code added the entity to the world while it was still
-             * at its constructor position.
+             * Put the projectile directly at the player's hand BEFORE
+             * adding it to the world.
              *
-             * The constructor position is effectively world origin until
-             * tickCharging() gets a chance to move the projectile to the hand.
-             *
-             * Outside spawn chunks, that first tick may never happen.
-             *
-             * Spawn it directly at the player so the entity starts in an
-             * already-active/simulated chunk.
-             *
-             * Use the player's current position plus the hand height that
-             * HeavyCoreEntity uses for standing/crouching.
+             * This prevents it from initially existing around world origin,
+             * which was responsible for spawn-chunk-dependent behavior.
              */
 
             double handHeight =
@@ -303,22 +312,32 @@ public class FlailItem extends Item {
 
 
             double radians =
-                    Math.toRadians(yaw);
+                    Math.toRadians(
+                            yaw
+                    );
 
 
             Vec3 right =
                     new Vec3(
-                            Math.cos(radians),
+                            Math.cos(
+                                    radians
+                            ),
                             0.0D,
-                            Math.sin(radians)
+                            Math.sin(
+                                    radians
+                            )
                     );
 
 
             Vec3 forward =
                     new Vec3(
-                            -Math.sin(radians),
+                            -Math.sin(
+                                    radians
+                            ),
                             0.0D,
-                            Math.cos(radians)
+                            Math.cos(
+                                    radians
+                            )
                     );
 
 
@@ -352,11 +371,10 @@ public class FlailItem extends Item {
 
 
             /*
-             * HeavyCoreEntity's position represents the bottom of its
-             * 0.5-block-high hitbox.
+             * HeavyCoreEntity has a 0.5-high hitbox.
              *
-             * Therefore subtract half the hitbox height so the hitbox
-             * center sits exactly on the hand position.
+             * Entity Y is its bottom, so subtract 0.25 to make the
+             * hitbox center coincide with the hand/projectile center.
              */
             core.setPos(
                     handPosition.x,
@@ -365,11 +383,6 @@ public class FlailItem extends Item {
             );
 
 
-            /*
-             * NOW add it to the world.
-             *
-             * It is already in the player's active chunk.
-             */
             serverLevel.addFreshEntity(
                     core
             );
@@ -381,11 +394,11 @@ public class FlailItem extends Item {
 
 
         /*
-         * If a READY core already exists, begin a new charge.
-         *
-         * Newly-created cores were already started above.
+         * Existing READY core can start a fresh charge.
          */
-        if (core.isReady()) {
+        if (
+                core.isReady()
+        ) {
 
             core.startCharging();
         }
@@ -424,7 +437,7 @@ public class FlailItem extends Item {
 
 
     // =========================================================================
-    // RELEASE / THROW
+    // RELEASE / THROW / RETURN
     // =========================================================================
 
     @Override
@@ -435,17 +448,17 @@ public class FlailItem extends Item {
             int timeLeft
     ) {
 
-        if (!(livingEntity instanceof Player player)) {
+        if (
+                !(livingEntity instanceof Player player)
+        ) {
 
             return false;
         }
 
 
-        /*
-         * releaseUsing is only allowed to perform the actual throw
-         * on the server.
-         */
-        if (!(level instanceof ServerLevel serverLevel)) {
+        if (
+                !(level instanceof ServerLevel serverLevel)
+        ) {
 
             return false;
         }
@@ -464,42 +477,56 @@ public class FlailItem extends Item {
 
 
         HeavyCoreEntity core =
-                state.getCore(serverLevel);
+                state.getCore(
+                        serverLevel
+                );
 
 
-        /*
-         * If the old entity no longer exists, clear the stale UUID.
-         *
-         * This makes the next use create a clean projectile.
-         */
         if (
                 core == null
                         || !core.isAlive()
         ) {
 
-            state.coreUuid = null;
+            state.coreUuid =
+                    null;
 
             return false;
         }
 
 
         /*
-         * Only charging cores can be thrown.
+         * =============================================================
+         * GROUNDED FLAIL
+         * =============================================================
+         *
+         * Releasing right click while grounded tells the projectile
+         * to return.
          */
-        if (!core.isCharging()) {
+        if (
+                core.isSagging()
+        ) {
+
+            core.releaseSagging();
+
+            return true;
+        }
+
+
+        /*
+         * Only CHARGING can become a normal throw.
+         */
+        if (
+                !core.isCharging()
+        ) {
 
             return false;
         }
 
 
         /*
-         * Crouching:
+         * Crouching = pull entity toward player.
          *
-         *     entity is pulled toward player
-         *
-         * Standing:
-         *
-         *     player is grappled toward entity
+         * Standing = grapple player toward entity.
          */
         boolean reversePull =
                 player.isCrouching();
@@ -540,7 +567,9 @@ public class FlailItem extends Item {
                 ServerLevel level
         ) {
 
-            if (coreUuid == null) {
+            if (
+                    coreUuid == null
+            ) {
 
                 return null;
             }
@@ -556,12 +585,12 @@ public class FlailItem extends Item {
                     entity instanceof HeavyCoreEntity core
             ) {
 
-                /*
-                 * If the entity has been removed, treat it as nonexistent.
-                 */
-                if (!core.isAlive()) {
+                if (
+                        !core.isAlive()
+                ) {
 
-                    coreUuid = null;
+                    coreUuid =
+                            null;
 
                     return null;
                 }
@@ -572,10 +601,10 @@ public class FlailItem extends Item {
 
 
             /*
-             * The stored entity UUID no longer resolves
-             * to a HeavyCoreEntity.
+             * UUID no longer resolves to the flail.
              */
-            coreUuid = null;
+            coreUuid =
+                    null;
 
 
             return null;

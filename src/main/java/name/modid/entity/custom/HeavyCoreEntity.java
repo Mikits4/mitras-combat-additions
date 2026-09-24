@@ -1,6 +1,7 @@
 package name.modid.entity.custom;
 
 import com.mojang.serialization.Codec;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
@@ -9,7 +10,13 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
-import net.minecraft.world.entity.*;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityDimensions;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.level.ChunkPos;
@@ -105,11 +112,11 @@ public class HeavyCoreEntity extends Entity {
      */
 
     /*
-     * The grapple applies force continuously for this entire duration.
+     * Continuous grapple duration.
      *
      * 8 ticks = 0.4 seconds.
      */
-    private static final int HOOK_LATCH_TICKS = 4;
+    private static final int HOOK_LATCH_TICKS = 8;
 
 
     /*
@@ -127,14 +134,12 @@ public class HeavyCoreEntity extends Entity {
 
     /*
      * -------------------------------------------------------------------------
-     * ENTITY PULL
+     * ENTITY PULL / CROUCH GRAPPLE
      * -------------------------------------------------------------------------
      */
 
     /*
-     * Base strength of the crouching grapple.
-     *
-     * Standing grapple uses this same value as its base.
+     * This is the base value used by BOTH grapple directions.
      */
     private static final double ENTITY_PULL_STRENGTH = 0.40D;
 
@@ -150,13 +155,13 @@ public class HeavyCoreEntity extends Entity {
      */
 
     /*
-     * Same base value as crouching/entity pull.
+     * Same base strength as crouch.
      */
     private static final double GRAPPLE_STRENGTH =
             ENTITY_PULL_STRENGTH;
 
     /*
-     * Additional horizontal force for each block of distance.
+     * Additional horizontal force per block of distance.
      */
     private static final double GRAPPLE_DISTANCE_SCALE = 0.04D;
 
@@ -166,30 +171,69 @@ public class HeavyCoreEntity extends Entity {
     private static final double GRAPPLE_VERTICAL_FORCE = 0.14D;
 
     /*
-     * Maximum upward velocity reached by the continuous lift.
+     * Maximum upward velocity.
      */
     private static final double GRAPPLE_MAX_VERTICAL_SPEED = 1.20D;
 
     /*
-     * Maximum horizontal grapple force applied per tick.
+     * Maximum horizontal force added per hooked tick.
      */
     private static final double MAX_GRAPPLE_FORCE = 2.10D;
 
 
     /*
      * -------------------------------------------------------------------------
-     * CHUNK LOADING
+     * SAGGING / TERRARIA-STYLE GROUNDED FLAIL
      * -------------------------------------------------------------------------
-     *
-     * The projectile is an independently ticking moving entity.
-     *
-     * Without an active chunk ticket, the server can stop ticking it once
-     * it travels outside the normally simulated area.
-     *
-     * The ticket follows the projectile and guarantees its current chunk
-     * and a small radius remain loaded/simulated.
      */
 
+    /*
+     * Horizontal momentum reduction after activating sag mode.
+     */
+    private static final double SAG_HORIZONTAL_DRAG = 0.82D;
+
+    /*
+     * Gravity while falling toward the floor.
+     */
+    private static final double SAG_GRAVITY = 0.08D;
+
+    /*
+     * Maximum downward speed.
+     */
+    private static final double SAG_MAX_FALL_SPEED = 1.00D;
+
+    /*
+     * Horizontal friction while resting/sliding on the floor.
+     */
+    private static final double SAG_GROUND_DRAG = 0.55D;
+
+    /*
+     * Damage dealt by a grounded flail.
+     */
+    private static final float SAG_DAMAGE = THROW_DAMAGE;
+
+    /*
+     * Same target can be damaged again after this many ticks.
+     */
+    private static final int SAG_DAMAGE_COOLDOWN = 5;
+
+    /*
+     * Extra radius around the grounded projectile for damage.
+     */
+    private static final double SAG_DAMAGE_RADIUS = 0.35D;
+
+
+    /*
+     * -------------------------------------------------------------------------
+     * CHUNK LOADING / SIMULATION
+     * -------------------------------------------------------------------------
+     */
+
+    /*
+     * Keep a small simulated area around the moving projectile.
+     *
+     * This is a radius, not a diameter.
+     */
     private static final int GRAPPLE_CHUNK_TICKET_RADIUS = 3;
 
 
@@ -273,10 +317,6 @@ public class HeavyCoreEntity extends Entity {
                     EntityDataSerializers.STRING
             );
 
-    /*
-     * true  = crouching / reverse fishing-rod pull
-     * false = standing / grapple
-     */
     private static final EntityDataAccessor<Boolean> DATA_REVERSE_PULL =
             SynchedEntityData.defineId(
                     HeavyCoreEntity.class,
@@ -321,10 +361,11 @@ public class HeavyCoreEntity extends Entity {
     private final Map<UUID, Integer> swingHitCooldowns =
             new HashMap<>();
 
+    private final Map<UUID, Integer> sagHitCooldowns =
+            new HashMap<>();
+
     /*
-     * Current server chunk being kept alive for this projectile.
-     *
-     * Only used on the logical server.
+     * Current chunk protected by the moving ticket.
      */
     private ChunkPos chunkTicketPosition = null;
 
@@ -333,12 +374,22 @@ public class HeavyCoreEntity extends Entity {
     // STATE
     // =========================================================================
 
+    /*
+     * SAGGING is intentionally last so older saved ordinal values remain valid.
+     */
     private enum State {
+
         READY,
+
         CHARGING,
+
         FLYING,
+
         HOOKED,
-        RETURNING
+
+        RETURNING,
+
+        SAGGING
     }
 
 
@@ -350,15 +401,16 @@ public class HeavyCoreEntity extends Entity {
             EntityType<? extends HeavyCoreEntity> type,
             Level level
     ) {
+
         super(type, level);
 
         /*
-         * Projectile gravity is handled manually.
+         * Projectile gravity is manually controlled.
          */
         setNoGravity(true);
 
         /*
-         * Collision is handled explicitly with ProjectileUtil.
+         * Flight collision uses ProjectileUtil.
          */
         this.noPhysics = true;
     }
@@ -378,6 +430,7 @@ public class HeavyCoreEntity extends Entity {
                 value < 0
                         || value >= State.values().length
         ) {
+
             return State.READY;
         }
 
@@ -386,7 +439,9 @@ public class HeavyCoreEntity extends Entity {
     }
 
 
-    private void setState(State state) {
+    private void setState(
+            State state
+    ) {
 
         entityData.set(
                 DATA_STATE,
@@ -396,12 +451,30 @@ public class HeavyCoreEntity extends Entity {
 
 
     public boolean isReady() {
-        return getState() == State.READY;
+
+        return getState()
+                == State.READY;
     }
 
 
     public boolean isCharging() {
-        return getState() == State.CHARGING;
+
+        return getState()
+                == State.CHARGING;
+    }
+
+
+    public boolean isFlying() {
+
+        return getState()
+                == State.FLYING;
+    }
+
+
+    public boolean isSagging() {
+
+        return getState()
+                == State.SAGGING;
     }
 
 
@@ -427,7 +500,9 @@ public class HeavyCoreEntity extends Entity {
         boolean leftHand;
 
 
-        if (hand == InteractionHand.OFF_HAND) {
+        if (
+                hand == InteractionHand.OFF_HAND
+        ) {
 
             leftHand =
                     player.getMainArm()
@@ -451,13 +526,16 @@ public class HeavyCoreEntity extends Entity {
     private Player getOwner() {
 
         String uuidString =
-                entityData.get(DATA_OWNER);
+                entityData.get(
+                        DATA_OWNER
+                );
 
 
         if (
                 uuidString == null
                         || uuidString.isEmpty()
         ) {
+
             return null;
         }
 
@@ -465,13 +543,19 @@ public class HeavyCoreEntity extends Entity {
         try {
 
             UUID uuid =
-                    UUID.fromString(uuidString);
+                    UUID.fromString(
+                            uuidString
+                    );
 
 
             return level()
-                    .getPlayerByUUID(uuid);
+                    .getPlayerByUUID(
+                            uuid
+                    );
 
-        } catch (IllegalArgumentException ignored) {
+        } catch (
+                IllegalArgumentException ignored
+        ) {
 
             return null;
         }
@@ -481,27 +565,35 @@ public class HeavyCoreEntity extends Entity {
     public UUID getOwnerUuid() {
 
         if (ownerUuid != null) {
+
             return ownerUuid;
         }
 
 
         String value =
-                entityData.get(DATA_OWNER);
+                entityData.get(
+                        DATA_OWNER
+                );
 
 
         if (
                 value == null
                         || value.isEmpty()
         ) {
+
             return null;
         }
 
 
         try {
 
-            return UUID.fromString(value);
+            return UUID.fromString(
+                    value
+            );
 
-        } catch (IllegalArgumentException ignored) {
+        } catch (
+                IllegalArgumentException ignored
+        ) {
 
             return null;
         }
@@ -509,12 +601,14 @@ public class HeavyCoreEntity extends Entity {
 
 
     // =========================================================================
-    // CHARGE
+    // CHARGING
     // =========================================================================
 
     public void startCharging() {
 
-        setState(State.CHARGING);
+        setState(
+                State.CHARGING
+        );
 
 
         chargeTicks = 0;
@@ -536,11 +630,16 @@ public class HeavyCoreEntity extends Entity {
 
         setNoGravity(true);
 
-        setDeltaMovement(Vec3.ZERO);
+        this.noPhysics = true;
+
+        setDeltaMovement(
+                Vec3.ZERO
+        );
     }
 
 
     public int getChargeTicks() {
+
         return chargeTicks;
     }
 
@@ -577,7 +676,9 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
-        return Math.abs(orbitSpeed)
+        return Math.abs(
+                orbitSpeed
+        )
                 * radius;
     }
 
@@ -593,7 +694,11 @@ public class HeavyCoreEntity extends Entity {
                         - THROW_MIN_SWING_SPEED;
 
 
-        if (swingRange <= 1.0E-6D) {
+        if (
+                swingRange
+                        <= 1.0E-6D
+        ) {
+
             return THROW_MIN_SPEED;
         }
 
@@ -636,12 +741,17 @@ public class HeavyCoreEntity extends Entity {
     // CHARGE ORBIT
     // =========================================================================
 
-    private void tickCharging(Player owner) {
+    private void tickCharging(
+            Player owner
+    ) {
 
         chargeTicks++;
 
 
-        if (chargeTicks > CHARGE_DURATION_TICKS) {
+        if (
+                chargeTicks
+                        > CHARGE_DURATION_TICKS
+        ) {
 
             chargeTicks =
                     CHARGE_DURATION_TICKS;
@@ -660,14 +770,18 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
-        orbitAngle += orbitSpeed;
+        orbitAngle +=
+                orbitSpeed;
 
 
         orbitAngle %=
                 Math.PI * 2.0D;
 
 
-        if (orbitAngle < 0.0D) {
+        if (
+                orbitAngle
+                        < 0.0D
+        ) {
 
             orbitAngle +=
                     Math.PI * 2.0D;
@@ -678,7 +792,10 @@ public class HeavyCoreEntity extends Entity {
                 owner.getLookAngle();
 
 
-        if (forward.lengthSqr() < 1.0E-6D) {
+        if (
+                forward.lengthSqr()
+                        < 1.0E-6D
+        ) {
 
             forward =
                     new Vec3(
@@ -711,10 +828,15 @@ public class HeavyCoreEntity extends Entity {
 
 
         Vec3 up =
-                forward.cross(right);
+                forward.cross(
+                        right
+                );
 
 
-        if (up.lengthSqr() < 1.0E-6D) {
+        if (
+                up.lengthSqr()
+                        < 1.0E-6D
+        ) {
 
             up =
                     new Vec3(
@@ -740,31 +862,36 @@ public class HeavyCoreEntity extends Entity {
 
         Vec3 orbitOffset =
                 forward.scale(
-                                Math.cos(orbitAngle)
+                                Math.cos(
+                                        orbitAngle
+                                )
                                         * radius
                         )
                         .add(
                                 up.scale(
-                                        Math.sin(orbitAngle)
+                                        Math.sin(
+                                                orbitAngle
+                                        )
                                                 * radius
                                 )
                         );
 
 
         Vec3 handPosition =
-                getHandPosition(owner);
+                getHandPosition(
+                        owner
+                );
 
 
         /*
-         * Calculate the VISUAL CENTER of the projectile.
-         *
-         * The hitbox is centered on X/Z and rises from entity position Y,
-         * so setProjectileCenter() converts this visual center into the
-         * entity position Minecraft expects.
+         * Position represents the bottom-center of the hitbox.
+         * Convert the desired visual center into that position.
          */
         Vec3 projectileCenter =
                 handPosition
-                        .add(orbitOffset);
+                        .add(
+                                orbitOffset
+                        );
 
 
         setProjectileCenter(
@@ -772,7 +899,9 @@ public class HeavyCoreEntity extends Entity {
         );
 
 
-        setDeltaMovement(Vec3.ZERO);
+        setDeltaMovement(
+                Vec3.ZERO
+        );
 
 
         float spinSpeed =
@@ -783,17 +912,24 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
-        spinAngle += spinSpeed;
+        spinAngle +=
+                spinSpeed;
 
 
-        while (spinAngle >= 360.0F) {
+        while (
+                spinAngle
+                        >= 360.0F
+        ) {
 
             spinAngle -=
                     360.0F;
         }
 
 
-        while (spinAngle < 0.0F) {
+        while (
+                spinAngle
+                        < 0.0F
+        ) {
 
             spinAngle +=
                     360.0F;
@@ -802,14 +938,14 @@ public class HeavyCoreEntity extends Entity {
 
 
     // =========================================================================
-    // PROJECTILE CENTER / HITBOX
+    // PROJECTILE CENTER / HITBOX ALIGNMENT
     // =========================================================================
 
     /*
-     * Sets the ENTITY POSITION so that the entity's bounding box is centered
-     * on the supplied visual/projectile center.
+     * Converts a desired visual center to Entity.position().
      *
-     * EntityDimensions height extends upward from position().Y.
+     * The 0.5F-high hitbox extends upward from the entity position,
+     * so its center is 0.25 blocks above that position.
      */
     private void setProjectileCenter(
             Vec3 center
@@ -840,6 +976,7 @@ public class HeavyCoreEntity extends Entity {
     ) {
 
         if (!isCharging()) {
+
             return;
         }
 
@@ -850,7 +987,9 @@ public class HeavyCoreEntity extends Entity {
         );
 
 
-        setState(State.FLYING);
+        setState(
+                State.FLYING
+        );
 
 
         flightTicks = 0;
@@ -865,7 +1004,10 @@ public class HeavyCoreEntity extends Entity {
         Vec3 launchDirection;
 
 
-        if (direction.lengthSqr() < 1.0E-6D) {
+        if (
+                direction.lengthSqr()
+                        < 1.0E-6D
+        ) {
 
             launchDirection =
                     new Vec3(
@@ -883,7 +1025,9 @@ public class HeavyCoreEntity extends Entity {
 
         Vec3 velocity =
                 launchDirection
-                        .scale(speed)
+                        .scale(
+                                speed
+                        )
                         .add(
                                 0.0D,
                                 THROW_UPWARD_VELOCITY,
@@ -893,6 +1037,8 @@ public class HeavyCoreEntity extends Entity {
 
         setNoGravity(true);
 
+        this.noPhysics = true;
+
 
         setDeltaMovement(
                 velocity
@@ -900,6 +1046,74 @@ public class HeavyCoreEntity extends Entity {
 
 
         hurtMarked = true;
+    }
+
+
+    // =========================================================================
+    // SAGGING MODE
+    // =========================================================================
+
+    /*
+     * Called by FlailItem when the player right-clicks while the
+     * projectile is already flying.
+     */
+    public void beginSagging() {
+
+        if (!isFlying()) {
+
+            return;
+        }
+
+
+        setState(
+                State.SAGGING
+        );
+
+
+        setNoGravity(true);
+
+
+        /*
+         * Enable actual block collision.
+         */
+        this.noPhysics = false;
+
+
+        Vec3 velocity =
+                getDeltaMovement();
+
+
+        /*
+         * Remove most forward momentum immediately.
+         */
+        setDeltaMovement(
+                new Vec3(
+                        velocity.x * 0.20D,
+                        Math.min(
+                                velocity.y,
+                                0.0D
+                        ),
+                        velocity.z * 0.20D
+                )
+        );
+
+
+        sagHitCooldowns.clear();
+
+
+        hurtMarked = true;
+    }
+
+
+    public void releaseSagging() {
+
+        if (!isSagging()) {
+
+            return;
+        }
+
+
+        beginReturning();
     }
 
 
@@ -930,9 +1144,13 @@ public class HeavyCoreEntity extends Entity {
         }
 
 
-        if (level().isClientSide()) {
+        if (
+                level().isClientSide()
+        ) {
 
-            tickClient(owner);
+            tickClient(
+                    owner
+            );
 
             return;
         }
@@ -943,19 +1161,21 @@ public class HeavyCoreEntity extends Entity {
 
 
         /*
-         * Keep the chunk containing the flail simulated.
+         * Keep the projectile's current chunk simulated.
          */
         updateChunkTicket(
                 serverLevel
         );
 
 
-        tickServer(owner);
+        tickServer(
+                owner
+        );
 
 
         /*
-         * The projectile may have crossed a chunk boundary during
-         * this tick, so update the ticket again afterward.
+         * Update again after movement so crossing a chunk boundary
+         * immediately moves the protected area.
          */
         if (isRemoved()) {
 
@@ -974,12 +1194,6 @@ public class HeavyCoreEntity extends Entity {
     // REMOVAL
     // =========================================================================
 
-    /*
-     * discard() is final in Entity, so cleanup is done through remove().
-     *
-     * This catches normal discard(), kill/remove calls, and other entity
-     * removal paths so the custom chunk ticket cannot be left behind.
-     */
     @Override
     public void remove(
             RemovalReason reason
@@ -987,23 +1201,22 @@ public class HeavyCoreEntity extends Entity {
 
         releaseChunkTicket();
 
-        super.remove(reason);
+        super.remove(
+                reason
+        );
     }
 
 
     // =========================================================================
-    // SERVER CHUNK TICKET
+    // CHUNK TICKET
     // =========================================================================
-
-    // =========================================================================
-// SERVER CHUNK TICKET
-// =========================================================================
 
     private void updateChunkTicket(
             ServerLevel serverLevel
     ) {
 
         if (isRemoved()) {
+
             return;
         }
 
@@ -1019,25 +1232,21 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
-        /*
-         * Already have the correct ticket position.
-         */
         if (
                 chunkTicketPosition != null
-                        && chunkTicketPosition.equals(newChunk)
+                        && chunkTicketPosition.equals(
+                        newChunk
+                )
         ) {
+
             return;
         }
 
 
         /*
-         * IMPORTANT:
+         * FORCED is a persistent loading + simulation ticket.
          *
-         * FORCED is a vanilla 1.21.5+ ticket type whose use is
-         * LOADING_AND_SIMULATION.
-         *
-         * UNKNOWN is NOT appropriate here:
-         * it is a loading-only ticket and has a short timeout.
+         * That distinction is important for a moving custom entity.
          */
         serverLevel.getChunkSource()
                 .addTicketWithRadius(
@@ -1055,9 +1264,6 @@ public class HeavyCoreEntity extends Entity {
                 newChunk;
 
 
-        /*
-         * Remove the old moving ticket after the new one exists.
-         */
         if (oldChunk != null) {
 
             serverLevel.getChunkSource()
@@ -1072,7 +1278,10 @@ public class HeavyCoreEntity extends Entity {
 
     private void releaseChunkTicket() {
 
-        if (chunkTicketPosition == null) {
+        if (
+                chunkTicketPosition == null
+        ) {
+
             return;
         }
 
@@ -1091,12 +1300,13 @@ public class HeavyCoreEntity extends Entity {
         }
 
 
-        chunkTicketPosition = null;
+        chunkTicketPosition =
+                null;
     }
 
 
     // =========================================================================
-    // HURT
+    // DAMAGE
     // =========================================================================
 
     @Override
@@ -1105,6 +1315,7 @@ public class HeavyCoreEntity extends Entity {
             DamageSource source,
             float damage
     ) {
+
         return false;
     }
 
@@ -1113,7 +1324,9 @@ public class HeavyCoreEntity extends Entity {
     // CLIENT TICK
     // =========================================================================
 
-    private void tickClient(Player owner) {
+    private void tickClient(
+            Player owner
+    ) {
 
         State state =
                 getState();
@@ -1122,10 +1335,14 @@ public class HeavyCoreEntity extends Entity {
         switch (state) {
 
             case CHARGING ->
-                    tickCharging(owner);
+
+                    tickCharging(
+                            owner
+                    );
 
 
             case FLYING ->
+
                     tickClientFlightPhysics();
 
 
@@ -1152,8 +1369,16 @@ public class HeavyCoreEntity extends Entity {
             }
 
 
+            case SAGGING ->
+
+                    tickClientSagging();
+
+
             case RETURNING ->
-                    tickReturning(owner);
+
+                    tickReturning(
+                            owner
+                    );
 
 
             case READY -> {
@@ -1165,7 +1390,9 @@ public class HeavyCoreEntity extends Entity {
         Vec3 referenceAxis;
 
 
-        if (state == State.CHARGING) {
+        if (
+                state == State.CHARGING
+        ) {
 
             referenceAxis =
                     owner.getLookAngle();
@@ -1226,11 +1453,82 @@ public class HeavyCoreEntity extends Entity {
     }
 
 
+    private void tickClientSagging() {
+
+        /*
+         * Match the server's collision behavior visually.
+         */
+        this.noPhysics = false;
+
+
+        Vec3 velocity =
+                getDeltaMovement();
+
+
+        double motionX =
+                velocity.x
+                        * SAG_HORIZONTAL_DRAG;
+
+
+        double motionZ =
+                velocity.z
+                        * SAG_HORIZONTAL_DRAG;
+
+
+        double motionY =
+                velocity.y
+                        - SAG_GRAVITY;
+
+
+        motionY =
+                Math.max(
+                        motionY,
+                        -SAG_MAX_FALL_SPEED
+                );
+
+
+        velocity =
+                new Vec3(
+                        motionX,
+                        motionY,
+                        motionZ
+                );
+
+
+        move(
+                MoverType.SELF,
+                velocity
+        );
+
+
+        if (onGround()) {
+
+            setDeltaMovement(
+                    new Vec3(
+                            velocity.x
+                                    * SAG_GROUND_DRAG,
+                            0.0D,
+                            velocity.z
+                                    * SAG_GROUND_DRAG
+                    )
+            );
+
+        } else {
+
+            setDeltaMovement(
+                    velocity
+            );
+        }
+    }
+
+
     // =========================================================================
     // SERVER TICK
     // =========================================================================
 
-    private void tickServer(Player owner) {
+    private void tickServer(
+            Player owner
+    ) {
 
         State state =
                 getState();
@@ -1240,28 +1538,46 @@ public class HeavyCoreEntity extends Entity {
 
             case CHARGING -> {
 
-                tickCharging(owner);
+                tickCharging(
+                        owner
+                );
+
 
                 /*
-                 * Swing damage is SERVER ONLY.
-                 *
-                 * This used to run from tickCharging(), which meant
-                 * client-side charging could enter the damage code.
+                 * Swing damage is server-only.
                  */
-                tickSwingDamage(owner);
+                tickSwingDamage(
+                        owner
+                );
             }
 
 
             case FLYING ->
-                    tickFlying(owner);
+
+                    tickFlying(
+                            owner
+                    );
 
 
             case HOOKED ->
-                    tickHooked(owner);
+
+                    tickHooked(
+                            owner
+                    );
 
 
             case RETURNING ->
-                    tickReturning(owner);
+
+                    tickReturning(
+                            owner
+                    );
+
+
+            case SAGGING ->
+
+                    tickSagging(
+                            owner
+                    );
 
 
             case READY -> {
@@ -1275,7 +1591,9 @@ public class HeavyCoreEntity extends Entity {
     // FLYING
     // =========================================================================
 
-    private void tickFlying(Player owner) {
+    private void tickFlying(
+            Player owner
+    ) {
 
         flightTicks++;
 
@@ -1284,7 +1602,10 @@ public class HeavyCoreEntity extends Entity {
                 getDeltaMovement();
 
 
-        if (velocity.lengthSqr() < 1.0E-8D) {
+        if (
+                velocity.lengthSqr()
+                        < 1.0E-8D
+        ) {
 
             beginReturning();
 
@@ -1293,10 +1614,11 @@ public class HeavyCoreEntity extends Entity {
 
 
         HitResult hit =
-                ProjectileUtil.getHitResultOnMoveVector(
-                        this,
-                        this::canHitEntity
-                );
+                ProjectileUtil
+                        .getHitResultOnMoveVector(
+                                this,
+                                this::canHitEntity
+                        );
 
 
         if (
@@ -1305,10 +1627,7 @@ public class HeavyCoreEntity extends Entity {
         ) {
 
             /*
-             * The hit result is the visual impact CENTER.
-             *
-             * Convert it to the entity position so the bounding box
-             * stays centered on the impact/projectile.
+             * Center the hitbox on the actual impact point.
              */
             setProjectileCenter(
                     hit.getLocation()
@@ -1390,7 +1709,11 @@ public class HeavyCoreEntity extends Entity {
                 hit.getEntity();
 
 
-        if (!canHitEntity(target)) {
+        if (
+                !canHitEntity(
+                        target
+                )
+        ) {
 
             beginReturning();
 
@@ -1400,17 +1723,22 @@ public class HeavyCoreEntity extends Entity {
 
         entityData.set(
                 DATA_HOOKED_ENTITY,
-                target.getUUID().toString()
+                target.getUUID()
+                        .toString()
         );
 
 
         hookTicks = 0;
 
 
-        setState(State.HOOKED);
+        setState(
+                State.HOOKED
+        );
 
 
-        setDeltaMovement(Vec3.ZERO);
+        setDeltaMovement(
+                Vec3.ZERO
+        );
 
 
         boolean reversePull =
@@ -1420,47 +1748,37 @@ public class HeavyCoreEntity extends Entity {
 
 
         if (
-                target instanceof LivingEntity livingTarget
+                target
+                        instanceof LivingEntity livingTarget
         ) {
 
             livingTarget.hurt(
                     owner.damageSources()
-                            .playerAttack(owner),
+                            .playerAttack(
+                                    owner
+                            ),
                     THROW_DAMAGE
             );
         }
 
 
+        /*
+         * Crouching mode immediately starts the entity pull.
+         *
+         * Standing mode is handled continuously by tickHooked().
+         */
         if (reversePull) {
 
-            /*
-             * Crouching mode:
-             * immediately pull the entity once,
-             * then continue pulling every hooked tick.
-             */
             pullEntityTowardPlayer(
                     owner,
                     target
             );
-
-
-            return;
         }
-
-
-        /*
-         * Standing grapple:
-         *
-         * No one-time force is applied here.
-         *
-         * The complete grapple force is applied every hooked tick
-         * in tickHooked().
-         */
     }
 
 
     // =========================================================================
-    // HOOKED ENTITY
+    // HOOKED
     // =========================================================================
 
     private Entity getHookedEntity() {
@@ -1483,19 +1801,27 @@ public class HeavyCoreEntity extends Entity {
         try {
 
             UUID uuid =
-                    UUID.fromString(uuidString);
+                    UUID.fromString(
+                            uuidString
+                    );
 
 
-            return level().getEntity(uuid);
+            return level().getEntity(
+                    uuid
+            );
 
-        } catch (IllegalArgumentException ignored) {
+        } catch (
+                IllegalArgumentException ignored
+        ) {
 
             return null;
         }
     }
 
 
-    private void tickHooked(Player owner) {
+    private void tickHooked(
+            Player owner
+    ) {
 
         Entity target =
                 getHookedEntity();
@@ -1521,19 +1847,11 @@ public class HeavyCoreEntity extends Entity {
                         .getCenter();
 
 
-        /*
-         * Keep the projectile centered on the hooked entity.
-         */
         setProjectileCenter(
                 targetCenter
         );
 
 
-        /*
-         * This is the FLAIL movement.
-         *
-         * It does not clear the player's velocity.
-         */
         setDeltaMovement(
                 Vec3.ZERO
         );
@@ -1548,8 +1866,8 @@ public class HeavyCoreEntity extends Entity {
         if (reversePull) {
 
             /*
-             * Crouch:
-             * continuous entity pull.
+             * Crouching grapple:
+             * continuously pull entity toward player.
              */
             pullEntityTowardPlayer(
                     owner,
@@ -1559,10 +1877,11 @@ public class HeavyCoreEntity extends Entity {
         } else {
 
             /*
-             * Standing:
-             * continuous player grapple force.
+             * Standing grapple:
+             * continuously accelerate the player toward the target.
              *
-             * This happens EVERY hooked tick.
+             * Both horizontal and vertical forces are applied on
+             * every hooked tick.
              */
             pullPlayerTowardEntity(
                     owner,
@@ -1601,10 +1920,16 @@ public class HeavyCoreEntity extends Entity {
 
         Vec3 direction =
                 ownerPosition
-                        .subtract(targetPosition);
+                        .subtract(
+                                targetPosition
+                        );
 
 
-        if (direction.lengthSqr() < 1.0E-6D) {
+        if (
+                direction.lengthSqr()
+                        < 1.0E-6D
+        ) {
+
             return;
         }
 
@@ -1613,9 +1938,6 @@ public class HeavyCoreEntity extends Entity {
                 direction.normalize();
 
 
-        /*
-         * Preserve the crouch grapple's original lift.
-         */
         direction =
                 new Vec3(
                         direction.x,
@@ -1633,7 +1955,9 @@ public class HeavyCoreEntity extends Entity {
 
         Vec3 velocity =
                 target.getDeltaMovement()
-                        .add(pull);
+                        .add(
+                                pull
+                        );
 
 
         if (
@@ -1678,27 +2002,31 @@ public class HeavyCoreEntity extends Entity {
 
         Vec3 difference =
                 targetPosition
-                        .subtract(playerPosition);
+                        .subtract(
+                                playerPosition
+                        );
 
 
-        if (difference.lengthSqr() < 1.0E-6D) {
+        if (
+                difference.lengthSqr()
+                        < 1.0E-6D
+        ) {
+
             return;
         }
 
 
         /*
-         * Distance is calculated before normalization.
+         * Distance is intentionally taken before normalization.
          */
         double distance =
                 difference.length();
 
 
         /*
-         * Horizontal direction only.
+         * Main grapple direction is horizontal.
          *
-         * This keeps the main grapple force forward instead of allowing
-         * the target's vertical position to turn the grapple into a giant
-         * upward launch.
+         * This keeps vertical movement controlled separately.
          */
         Vec3 horizontalDirection =
                 new Vec3(
@@ -1722,9 +2050,9 @@ public class HeavyCoreEntity extends Entity {
 
 
         /*
-         * Base grapple strength is exactly the same as the crouch grapple.
+         * Same base strength as crouch mode.
          *
-         * Distance adds additional horizontal force.
+         * Farther away = stronger horizontal force.
          */
         double grappleForce =
                 GRAPPLE_STRENGTH
@@ -1741,9 +2069,6 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
-        /*
-         * Continuous horizontal force.
-         */
         Vec3 horizontalPull =
                 horizontalDirection.scale(
                         grappleForce
@@ -1751,20 +2076,18 @@ public class HeavyCoreEntity extends Entity {
 
 
         /*
-         * Continuous vertical acceleration.
+         * Continuous vertical force.
+         *
+         * It is independent of target height.
          */
-        double newVerticalVelocity =
+        double verticalVelocity =
                 player.getDeltaMovement().y
                         + GRAPPLE_VERTICAL_FORCE;
 
 
-        /*
-         * Cap upward velocity while still allowing ordinary downward
-         * velocity to be corrected by the continuous lift.
-         */
-        newVerticalVelocity =
+        verticalVelocity =
                 Math.min(
-                        newVerticalVelocity,
+                        verticalVelocity,
                         GRAPPLE_MAX_VERTICAL_SPEED
                 );
 
@@ -1773,15 +2096,11 @@ public class HeavyCoreEntity extends Entity {
                 player.getDeltaMovement();
 
 
-        /*
-         * Apply horizontal acceleration every hooked tick,
-         * while applying vertical acceleration independently.
-         */
         velocity =
                 new Vec3(
                         velocity.x
                                 + horizontalPull.x,
-                        newVerticalVelocity,
+                        verticalVelocity,
                         velocity.z
                                 + horizontalPull.z
                 );
@@ -1797,12 +2116,190 @@ public class HeavyCoreEntity extends Entity {
 
 
     // =========================================================================
+    // SAGGING / GROUNDED FLAIL
+    // =========================================================================
+
+    private void tickSagging(
+            Player owner
+    ) {
+
+        this.noPhysics = false;
+
+
+        Vec3 velocity =
+                getDeltaMovement();
+
+
+        double motionX =
+                velocity.x
+                        * SAG_HORIZONTAL_DRAG;
+
+
+        double motionZ =
+                velocity.z
+                        * SAG_HORIZONTAL_DRAG;
+
+
+        double motionY =
+                velocity.y
+                        - SAG_GRAVITY;
+
+
+        motionY =
+                Math.max(
+                        motionY,
+                        -SAG_MAX_FALL_SPEED
+                );
+
+
+        velocity =
+                new Vec3(
+                        motionX,
+                        motionY,
+                        motionZ
+                );
+
+
+        move(
+                MoverType.SELF,
+                velocity
+        );
+
+
+        if (onGround()) {
+
+            Vec3 groundVelocity =
+                    getDeltaMovement();
+
+
+            double groundX =
+                    groundVelocity.x
+                            * SAG_GROUND_DRAG;
+
+
+            double groundZ =
+                    groundVelocity.z
+                            * SAG_GROUND_DRAG;
+
+
+            if (
+                    Math.abs(groundX)
+                            < 0.01D
+                            && Math.abs(groundZ)
+                            < 0.01D
+            ) {
+
+                groundX = 0.0D;
+                groundZ = 0.0D;
+            }
+
+
+            setDeltaMovement(
+                    new Vec3(
+                            groundX,
+                            0.0D,
+                            groundZ
+                    )
+            );
+
+        } else {
+
+            setDeltaMovement(
+                    velocity
+            );
+        }
+
+
+        tickSagDamage(
+                owner
+        );
+
+
+        hurtMarked = true;
+    }
+
+
+    private void tickSagDamage(
+            Player owner
+    ) {
+
+        sagHitCooldowns.replaceAll(
+                (
+                        uuid,
+                        cooldown
+                ) ->
+                        cooldown - 1
+        );
+
+
+        sagHitCooldowns.entrySet()
+                .removeIf(
+                        entry ->
+                                entry.getValue()
+                                        <= 0
+                );
+
+
+        for (
+                Entity target :
+                level().getEntities(
+                        this,
+                        getBoundingBox()
+                                .inflate(
+                                        SAG_DAMAGE_RADIUS,
+                                        0.30D,
+                                        SAG_DAMAGE_RADIUS
+                                ),
+                        entity ->
+                                entity instanceof LivingEntity
+                                        && canHitEntity(
+                                        entity
+                                )
+                )
+        ) {
+
+            if (target == owner) {
+
+                continue;
+            }
+
+
+            if (
+                    sagHitCooldowns.containsKey(
+                            target.getUUID()
+                    )
+            ) {
+
+                continue;
+            }
+
+
+            target.hurt(
+                    owner.damageSources()
+                            .playerAttack(
+                                    owner
+                            ),
+                    SAG_DAMAGE
+            );
+
+
+            sagHitCooldowns.put(
+                    target.getUUID(),
+                    SAG_DAMAGE_COOLDOWN
+            );
+        }
+    }
+
+
+    // =========================================================================
     // RETURN
     // =========================================================================
 
     private void beginReturning() {
 
-        setState(State.RETURNING);
+        setState(
+                State.RETURNING
+        );
 
 
         entityData.set(
@@ -1814,13 +2311,21 @@ public class HeavyCoreEntity extends Entity {
         setNoGravity(true);
 
 
+        /*
+         * Return collision remains enabled.
+         */
+        this.noPhysics = false;
+
+
         setDeltaMovement(
                 Vec3.ZERO
         );
     }
 
 
-    private void tickReturning(Player owner) {
+    private void tickReturning(
+            Player owner
+    ) {
 
         Vec3 target =
                 owner.getBoundingBox()
@@ -1858,7 +2363,10 @@ public class HeavyCoreEntity extends Entity {
         }
 
 
-        if (distance < 1.0E-6D) {
+        if (
+                distance
+                        < 1.0E-6D
+        ) {
 
             setProjectileCenter(
                     target
@@ -1904,7 +2412,9 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
-        if (step >= distance) {
+        if (
+                step >= distance
+        ) {
 
             setProjectileCenter(
                     target
@@ -1946,16 +2456,21 @@ public class HeavyCoreEntity extends Entity {
     ) {
 
         if (entity == this) {
+
             return false;
         }
 
 
-        if (entity == getOwner()) {
+        if (
+                entity == getOwner()
+        ) {
+
             return false;
         }
 
 
         if (!entity.isAlive()) {
+
             return false;
         }
 
@@ -1982,7 +2497,10 @@ public class HeavyCoreEntity extends Entity {
     ) {
 
         swingHitCooldowns.replaceAll(
-                (uuid, cooldown) ->
+                (
+                        uuid,
+                        cooldown
+                ) ->
                         cooldown - 1
         );
 
@@ -2000,29 +2518,36 @@ public class HeavyCoreEntity extends Entity {
                 level().getEntities(
                         this,
                         getBoundingBox()
-                                .inflate(0.35D),
+                                .inflate(
+                                        0.35D
+                                ),
                         this::canHitEntity
                 )
         ) {
 
-            if (target == owner) {
+            if (
+                    target == owner
+            ) {
+
                 continue;
             }
 
 
             if (
-                    swingHitCooldowns
-                            .containsKey(
-                                    target.getUUID()
-                            )
+                    swingHitCooldowns.containsKey(
+                            target.getUUID()
+                    )
             ) {
+
                 continue;
             }
 
 
             target.hurt(
                     owner.damageSources()
-                            .playerAttack(owner),
+                            .playerAttack(
+                                    owner
+                            ),
                     SWING_DAMAGE
             );
 
@@ -2044,6 +2569,7 @@ public class HeavyCoreEntity extends Entity {
     ) {
 
         if (!isCharging()) {
+
             return spinAngle;
         }
 
@@ -2069,11 +2595,13 @@ public class HeavyCoreEntity extends Entity {
 
 
     public float getWobblePitch() {
+
         return wobblePitch;
     }
 
 
     public float getWobbleRoll() {
+
         return wobbleRoll;
     }
 
@@ -2103,7 +2631,10 @@ public class HeavyCoreEntity extends Entity {
                 referenceAxis;
 
 
-        if (axis.lengthSqr() < 1.0E-6D) {
+        if (
+                axis.lengthSqr()
+                        < 1.0E-6D
+        ) {
 
             axis =
                     new Vec3(
@@ -2128,10 +2659,15 @@ public class HeavyCoreEntity extends Entity {
 
 
         Vec3 right =
-                axis.cross(worldUp);
+                axis.cross(
+                        worldUp
+                );
 
 
-        if (right.lengthSqr() < 1.0E-6D) {
+        if (
+                right.lengthSqr()
+                        < 1.0E-6D
+        ) {
 
             right =
                     new Vec3(
@@ -2148,10 +2684,15 @@ public class HeavyCoreEntity extends Entity {
 
 
         Vec3 up =
-                right.cross(axis);
+                right.cross(
+                        axis
+                );
 
 
-        if (up.lengthSqr() < 1.0E-6D) {
+        if (
+                up.lengthSqr()
+                        < 1.0E-6D
+        ) {
 
             up =
                     new Vec3(
@@ -2168,12 +2709,16 @@ public class HeavyCoreEntity extends Entity {
 
 
         double pitchTarget =
-                acceleration.dot(up)
+                acceleration.dot(
+                        up
+                )
                         * WOBBLE_ACCELERATION_SCALE;
 
 
         double rollTarget =
-                acceleration.dot(right)
+                acceleration.dot(
+                        right
+                )
                         * WOBBLE_ACCELERATION_SCALE;
 
 
@@ -2201,14 +2746,16 @@ public class HeavyCoreEntity extends Entity {
                 (
                         (float) pitchTarget
                                 - wobblePitch
-                ) * WOBBLE_SPRING;
+                )
+                        * WOBBLE_SPRING;
 
 
         wobbleRollVelocity +=
                 (
                         (float) rollTarget
                                 - wobbleRoll
-                ) * WOBBLE_SPRING;
+                )
+                        * WOBBLE_SPRING;
 
 
         wobblePitchVelocity *=
@@ -2257,22 +2804,32 @@ public class HeavyCoreEntity extends Entity {
 
 
         double yawRadians =
-                Math.toRadians(yaw);
+                Math.toRadians(
+                        yaw
+                );
 
 
         Vec3 forward =
                 new Vec3(
-                        -Math.sin(yawRadians),
+                        -Math.sin(
+                                yawRadians
+                        ),
                         0.0D,
-                        Math.cos(yawRadians)
+                        Math.cos(
+                                yawRadians
+                        )
                 );
 
 
         Vec3 right =
                 new Vec3(
-                        Math.cos(yawRadians),
+                        Math.cos(
+                                yawRadians
+                        ),
                         0.0D,
-                        Math.sin(yawRadians)
+                        Math.sin(
+                                yawRadians
+                        )
                 );
 
 
@@ -2399,12 +2956,6 @@ public class HeavyCoreEntity extends Entity {
         );
 
 
-        /*
-         * Save the current hook target too.
-         *
-         * Otherwise reloading a world while the flail is hooked would
-         * restore HOOKED state without restoring the actual target.
-         */
         String hookedEntity =
                 entityData.get(
                         DATA_HOOKED_ENTITY
@@ -2463,7 +3014,9 @@ public class HeavyCoreEntity extends Entity {
 
 
         int stateId =
-                input.getInt("State")
+                input.getInt(
+                                "State"
+                        )
                         .orElse(
                                 State.READY.ordinal()
                         );
@@ -2471,8 +3024,7 @@ public class HeavyCoreEntity extends Entity {
 
         if (
                 stateId >= 0
-                        && stateId
-                        < State.values().length
+                        && stateId < State.values().length
         ) {
 
             setState(
@@ -2489,9 +3041,10 @@ public class HeavyCoreEntity extends Entity {
 
         boolean reversePull =
                 input.read(
-                        "ReversePull",
-                        Codec.BOOL
-                ).orElse(false);
+                                "ReversePull",
+                                Codec.BOOL
+                        )
+                        .orElse(false);
 
 
         entityData.set(
@@ -2502,9 +3055,10 @@ public class HeavyCoreEntity extends Entity {
 
         boolean leftHand =
                 input.read(
-                        "LeftHand",
-                        Codec.BOOL
-                ).orElse(false);
+                                "LeftHand",
+                                Codec.BOOL
+                        )
+                        .orElse(false);
 
 
         entityData.set(
@@ -2513,7 +3067,9 @@ public class HeavyCoreEntity extends Entity {
         );
 
 
-        input.getString("HookedEntity")
+        input.getString(
+                        "HookedEntity"
+                )
                 .ifPresent(
                         hookedEntity -> {
 

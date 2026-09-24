@@ -190,7 +190,7 @@ public class HeavyCoreEntity extends Entity {
      * and a small radius remain loaded/simulated.
      */
 
-    private static final int GRAPPLE_CHUNK_TICKET_RADIUS = 2;
+    private static final int GRAPPLE_CHUNK_TICKET_RADIUS = 3;
 
 
     /*
@@ -943,22 +943,19 @@ public class HeavyCoreEntity extends Entity {
 
 
         /*
-         * Refresh the chunk ticket BEFORE processing movement.
-         *
-         * This guarantees the current chunk is loaded when the entity
-         * needs to tick.
+         * Keep the chunk containing the flail simulated.
          */
-        updateChunkTicket(serverLevel);
+        updateChunkTicket(
+                serverLevel
+        );
 
 
         tickServer(owner);
 
 
         /*
-         * Refresh again AFTER processing movement.
-         *
-         * This catches the new destination chunk immediately if the
-         * projectile crossed a chunk boundary this tick.
+         * The projectile may have crossed a chunk boundary during
+         * this tick, so update the ticket again afterward.
          */
         if (isRemoved()) {
 
@@ -966,7 +963,9 @@ public class HeavyCoreEntity extends Entity {
 
         } else {
 
-            updateChunkTicket(serverLevel);
+            updateChunkTicket(
+                    serverLevel
+            );
         }
     }
 
@@ -996,6 +995,10 @@ public class HeavyCoreEntity extends Entity {
     // SERVER CHUNK TICKET
     // =========================================================================
 
+    // =========================================================================
+// SERVER CHUNK TICKET
+// =========================================================================
+
     private void updateChunkTicket(
             ServerLevel serverLevel
     ) {
@@ -1005,7 +1008,9 @@ public class HeavyCoreEntity extends Entity {
         }
 
 
-        BlockPos pos = blockPosition();
+        BlockPos pos =
+                blockPosition();
+
 
         ChunkPos newChunk =
                 new ChunkPos(
@@ -1014,6 +1019,9 @@ public class HeavyCoreEntity extends Entity {
                 );
 
 
+        /*
+         * Already have the correct ticket position.
+         */
         if (
                 chunkTicketPosition != null
                         && chunkTicketPosition.equals(newChunk)
@@ -1023,14 +1031,17 @@ public class HeavyCoreEntity extends Entity {
 
 
         /*
-         * Add the new ticket FIRST.
+         * IMPORTANT:
          *
-         * This prevents a gap where the old chunk is unloaded before
-         * the new chunk has been protected.
+         * FORCED is a vanilla 1.21.5+ ticket type whose use is
+         * LOADING_AND_SIMULATION.
+         *
+         * UNKNOWN is NOT appropriate here:
+         * it is a loading-only ticket and has a short timeout.
          */
         serverLevel.getChunkSource()
                 .addTicketWithRadius(
-                        TicketType.UNKNOWN,
+                        TicketType.FORCED,
                         newChunk,
                         GRAPPLE_CHUNK_TICKET_RADIUS
                 );
@@ -1044,11 +1055,14 @@ public class HeavyCoreEntity extends Entity {
                 newChunk;
 
 
+        /*
+         * Remove the old moving ticket after the new one exists.
+         */
         if (oldChunk != null) {
 
             serverLevel.getChunkSource()
                     .removeTicketWithRadius(
-                            TicketType.UNKNOWN,
+                            TicketType.FORCED,
                             oldChunk,
                             GRAPPLE_CHUNK_TICKET_RADIUS
                     );
@@ -1070,7 +1084,7 @@ public class HeavyCoreEntity extends Entity {
 
             serverLevel.getChunkSource()
                     .removeTicketWithRadius(
-                            TicketType.UNKNOWN,
+                            TicketType.FORCED,
                             chunkTicketPosition,
                             GRAPPLE_CHUNK_TICKET_RADIUS
                     );

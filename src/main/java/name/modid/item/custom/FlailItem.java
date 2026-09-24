@@ -21,6 +21,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ItemUseAnimation;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.Map;
 import java.util.UUID;
@@ -184,12 +185,9 @@ public class FlailItem extends Item {
 
 
         /*
-         * Client side:
+         * Client accepts the use action.
          *
-         * The client needs to accept the use action so that Minecraft
-         * begins the item-use animation/timing.
-         *
-         * The actual projectile creation happens only on the server.
+         * Actual projectile creation happens on the server.
          */
         if (level.isClientSide()) {
 
@@ -219,8 +217,7 @@ public class FlailItem extends Item {
 
 
         /*
-         * If the UUID refers to an entity that has already been removed,
-         * clear it immediately.
+         * Clear stale projectile UUIDs.
          */
         if (
                 core == null
@@ -232,14 +229,8 @@ public class FlailItem extends Item {
 
 
         /*
-         * Do not allow another throw while an active core is:
-         *
-         * CHARGING
-         * FLYING
-         * HOOKED
-         * RETURNING
-         *
-         * READY is the only usable state.
+         * Don't allow a second projectile while the current one
+         * is charging, flying, hooked, or returning.
          */
         if (
                 core != null
@@ -252,9 +243,7 @@ public class FlailItem extends Item {
 
 
         /*
-         * No usable core exists.
-         *
-         * Create a fresh projectile.
+         * Create a new Heavy Core when no active one exists.
          */
         if (
                 core == null
@@ -268,6 +257,9 @@ public class FlailItem extends Item {
                     );
 
 
+            /*
+             * Set the owner BEFORE positioning the projectile.
+             */
             core.setOwner(
                     player,
                     hand
@@ -275,14 +267,109 @@ public class FlailItem extends Item {
 
 
             /*
-             * START CHARGING ONLY ONCE.
-             *
-             * The old code called this here and then immediately
-             * called it again after the if block.
+             * Start charging.
              */
             core.startCharging();
 
 
+            /*
+             * =============================================================
+             * CRITICAL BUG FIX
+             * =============================================================
+             *
+             * The old code added the entity to the world while it was still
+             * at its constructor position.
+             *
+             * The constructor position is effectively world origin until
+             * tickCharging() gets a chance to move the projectile to the hand.
+             *
+             * Outside spawn chunks, that first tick may never happen.
+             *
+             * Spawn it directly at the player so the entity starts in an
+             * already-active/simulated chunk.
+             *
+             * Use the player's current position plus the hand height that
+             * HeavyCoreEntity uses for standing/crouching.
+             */
+
+            double handHeight =
+                    player.isCrouching()
+                            ? 1.02D
+                            : 1.22D;
+
+
+            float yaw =
+                    player.getYRot();
+
+
+            double radians =
+                    Math.toRadians(yaw);
+
+
+            Vec3 right =
+                    new Vec3(
+                            Math.cos(radians),
+                            0.0D,
+                            Math.sin(radians)
+                    );
+
+
+            Vec3 forward =
+                    new Vec3(
+                            -Math.sin(radians),
+                            0.0D,
+                            Math.cos(radians)
+                    );
+
+
+            boolean leftHand =
+                    core.isLeftHand();
+
+
+            double sideOffset =
+                    leftHand
+                            ? -0.36D
+                            : 0.36D;
+
+
+            Vec3 handPosition =
+                    player.position()
+                            .add(
+                                    right.scale(
+                                            sideOffset
+                                    )
+                            )
+                            .add(
+                                    forward.scale(
+                                            0.04D
+                                    )
+                            )
+                            .add(
+                                    0.0D,
+                                    handHeight,
+                                    0.0D
+                            );
+
+
+            /*
+             * HeavyCoreEntity's position represents the bottom of its
+             * 0.5-block-high hitbox.
+             *
+             * Therefore subtract half the hitbox height so the hitbox
+             * center sits exactly on the hand position.
+             */
+            core.setPos(
+                    handPosition.x,
+                    handPosition.y - 0.25D,
+                    handPosition.z
+            );
+
+
+            /*
+             * NOW add it to the world.
+             *
+             * It is already in the player's active chunk.
+             */
             serverLevel.addFreshEntity(
                     core
             );
@@ -294,11 +381,9 @@ public class FlailItem extends Item {
 
 
         /*
-         * If we reached here with an existing READY core,
-         * begin its new charge.
+         * If a READY core already exists, begin a new charge.
          *
-         * A newly created core has already been charged above,
-         * so don't reset it a second time.
+         * Newly-created cores were already started above.
          */
         if (core.isReady()) {
 
@@ -306,9 +391,6 @@ public class FlailItem extends Item {
         }
 
 
-        /*
-         * Tell the player that the item is now being used.
-         */
         player.startUsingItem(
                 hand
         );

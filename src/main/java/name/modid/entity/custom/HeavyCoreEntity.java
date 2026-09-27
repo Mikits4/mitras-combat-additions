@@ -116,7 +116,7 @@ public class HeavyCoreEntity extends Entity {
      *
      * 8 ticks = 0.4 seconds.
      */
-    private static final int HOOK_LATCH_TICKS = 8;
+    private static final int HOOK_LATCH_TICKS = 4;
 
 
     /*
@@ -143,7 +143,7 @@ public class HeavyCoreEntity extends Entity {
      */
     private static final double ENTITY_PULL_STRENGTH = 0.40D;
 
-    private static final double ENTITY_PULL_LIFT = 0.18D;
+    private static final double ENTITY_PULL_LIFT = 100.38D; //does nothing!!!
 
     private static final double ENTITY_PULL_MAX_SPEED = 1.50D;
 
@@ -168,7 +168,7 @@ public class HeavyCoreEntity extends Entity {
     /*
      * Continuous upward acceleration per hooked tick.
      */
-    private static final double GRAPPLE_VERTICAL_FORCE = 0.14D;
+    private static final double GRAPPLE_VERTICAL_FORCE = 0.20D; // this works
 
     /*
      * Maximum upward velocity.

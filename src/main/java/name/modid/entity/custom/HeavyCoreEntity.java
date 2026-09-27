@@ -120,7 +120,7 @@ public class HeavyCoreEntity extends Projectile {
 
     private static final int MAX_FLIGHT_TICKS = 80;
 
-    private static final double MAX_THROW_DISTANCE = 40.0D;
+    private static final double MAX_THROW_DISTANCE = 20.0D;
 
 
     /*

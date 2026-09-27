@@ -1,5 +1,4 @@
-
-        package name.modid.entity;
+package name.modid.entity;
 
 import name.modid.MitraSCombatAdditions;
 import name.modid.entity.custom.HeavyCoreEntity;
@@ -19,8 +18,14 @@ public class ModEntities {
             register(
                     "heavy_core_entity",
                     EntityType.Builder
-                            .of(HeavyCoreEntity::new, MobCategory.MISC)
-                            .sized(1.0F, 1.0F)
+                            .of(
+                                    HeavyCoreEntity::new,
+                                    MobCategory.MISC
+                            )
+                            .sized(
+                                    0.5F,
+                                    0.5F
+                            )
                             .clientTrackingRange(8)
                             .updateInterval(1)
             );
@@ -29,13 +34,16 @@ public class ModEntities {
             String name,
             EntityType.Builder<T> builder
     ) {
-        ResourceKey<EntityType<?>> key = ResourceKey.create(
-                Registries.ENTITY_TYPE,
-                Identifier.fromNamespaceAndPath(
-                        MitraSCombatAdditions.MOD_ID,
-                        name
-                )
-        );
+
+        ResourceKey<EntityType<?>> key =
+                ResourceKey.create(
+                        Registries.ENTITY_TYPE,
+                        Identifier.fromNamespaceAndPath(
+                                MitraSCombatAdditions.MOD_ID,
+                                name
+                        )
+                );
+
 
         return Registry.register(
                 BuiltInRegistries.ENTITY_TYPE,
@@ -44,8 +52,8 @@ public class ModEntities {
         );
     }
 
+
     public static void registerModEntities() {
         // Loading this class causes the entity type to be registered.
     }
 }
-

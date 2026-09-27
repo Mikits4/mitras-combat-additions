@@ -21,6 +21,9 @@
 		],
 		"fabric-datagen": [
 			"name.modid.MitraSCombatAdditionsDataGenerator"
+		],
+		"client": [
+			"name.modid.MitraSCombatAdditionsClient"
 		]
 	},
 	"mixins": [

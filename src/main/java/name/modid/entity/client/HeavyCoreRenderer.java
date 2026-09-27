@@ -29,32 +29,23 @@ public class HeavyCoreRenderer
         HeavyCoreEntity,
         HeavyCoreRenderer.HeavyCoreRenderState> {
 
-    // =========================================================================
-    // TUNING
-    // =========================================================================
+    // chain
 
     private static final double CHAIN_LINK_SPACING = 0.24D;
 
     private static final float CHAIN_SCALE = 0.42F;
 
-    /*
-     * Rendered size of the Heavy Core projectile.
-     *
-     * The model remains centered on the projectile's actual visual center.
-     */
+    // core
+
     private static final float PROJECTILE_SCALE = 0.60F;
 
-
-    // =========================================================================
-    // MODEL RESOLVER
-    // =========================================================================
+    // visual offset from the hitbox pivot.
+    //
+    // this does not move the entity or its hitbox.
+    // it only moves the visible heavy core away from the player.
+    private static final double CORE_VISUAL_OFFSET = 0.25D;
 
     private final BlockModelResolver blockModelResolver;
-
-
-    // =========================================================================
-    // CONSTRUCTOR
-    // =========================================================================
 
     public HeavyCoreRenderer(
             EntityRendererProvider.Context context
@@ -67,21 +58,10 @@ public class HeavyCoreRenderer
         this.shadowRadius = 0.5F;
     }
 
-
-    // =========================================================================
-    // CREATE RENDER STATE
-    // =========================================================================
-
     @Override
     public HeavyCoreRenderState createRenderState() {
-
         return new HeavyCoreRenderState();
     }
-
-
-    // =========================================================================
-    // EXTRACT RENDER STATE
-    // =========================================================================
 
     @Override
     public void extractRenderState(
@@ -89,31 +69,16 @@ public class HeavyCoreRenderer
             HeavyCoreRenderState state,
             float partialTick
     ) {
-
         super.extractRenderState(
                 entity,
                 state,
                 partialTick
         );
 
-
-        /*
-         * ---------------------------------------------------------
-         * CORE ROTATION
-         * ---------------------------------------------------------
-         */
-
         state.spinAngle =
                 entity.getSpinAngle(
                         partialTick
                 );
-
-
-        /*
-         * ---------------------------------------------------------
-         * PHYSICS WOBBLE
-         * ---------------------------------------------------------
-         */
 
         state.wobblePitch =
                 entity.getWobblePitch();
@@ -121,22 +86,8 @@ public class HeavyCoreRenderer
         state.wobbleRoll =
                 entity.getWobbleRoll();
 
-
-        /*
-         * ---------------------------------------------------------
-         * OWNER
-         * ---------------------------------------------------------
-         */
-
         Player owner =
                 getOwner(entity);
-
-
-        /*
-         * ---------------------------------------------------------
-         * HEAVY CORE MODEL
-         * ---------------------------------------------------------
-         */
 
         blockModelResolver.update(
                 state.blockModel,
@@ -144,29 +95,11 @@ public class HeavyCoreRenderer
                 state.blockDisplayContext
         );
 
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN MODEL
-         * ---------------------------------------------------------
-         */
-
         blockModelResolver.update(
                 state.chainModel,
                 Blocks.IRON_CHAIN.defaultBlockState(),
                 state.chainDisplayContext
         );
-
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN END
-         * ---------------------------------------------------------
-         *
-         * Calculate the player's hand position in WORLD coordinates,
-         * then convert it into coordinates relative to the rendered
-         * Heavy Core origin.
-         */
 
         if (owner != null) {
 
@@ -176,16 +109,6 @@ public class HeavyCoreRenderer
                             entity
                     );
 
-
-            /*
-             * IMPORTANT:
-             *
-             * EntityRenderer's render state already contains the
-             * interpolated entity position used for this frame.
-             *
-             * Use state.x/y/z rather than entity.position() so the
-             * chain does not visually slide when interpolation occurs.
-             */
             Vec3 renderOrigin =
                     new Vec3(
                             state.x,
@@ -193,12 +116,10 @@ public class HeavyCoreRenderer
                             state.z
                     );
 
-
             Vec3 relative =
                     handPosition.subtract(
                             renderOrigin
                     );
-
 
             state.chainEndX =
                     relative.x;
@@ -209,21 +130,13 @@ public class HeavyCoreRenderer
             state.chainEndZ =
                     relative.z;
 
-
-            state.hasChain =
-                    true;
+            state.hasChain = true;
 
         } else {
 
-            state.hasChain =
-                    false;
+            state.hasChain = false;
         }
     }
-
-
-    // =========================================================================
-    // RENDER
-    // =========================================================================
 
     @Override
     public void submit(
@@ -232,15 +145,6 @@ public class HeavyCoreRenderer
             SubmitNodeCollector submitNodeCollector,
             CameraRenderState camera
     ) {
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN
-         * ---------------------------------------------------------
-         *
-         * Render the chain first so the Heavy Core naturally sits
-         * on top of the final chain link.
-         */
 
         if (state.hasChain) {
 
@@ -251,57 +155,86 @@ public class HeavyCoreRenderer
             );
         }
 
-
-        /*
-         * ---------------------------------------------------------
-         * HEAVY CORE
-         * ---------------------------------------------------------
-         */
-
         poseStack.pushPose();
 
+        /*
+         * the entity pivot remains at the hitbox center.
+         *
+         * heavycoreentity has a 0.5 high hitbox, so its center is
+         * 0.25 above entity position.
+         *
+         * the visible core is then moved along the axis pointing
+         * away from the player.
+         */
+
+        Vec3 pivot =
+                new Vec3(
+                        0.0D,
+                        0.25D,
+                        0.0D
+                );
+
+        Vec3 hand =
+                new Vec3(
+                        state.chainEndX,
+                        state.chainEndY,
+                        state.chainEndZ
+                );
+
+        Vec3 awayFromPlayer =
+                pivot.subtract(hand);
+
+        if (
+                awayFromPlayer.lengthSqr()
+                        < 1.0E-6D
+        ) {
+
+            awayFromPlayer =
+                    new Vec3(
+                            0.0D,
+                            1.0D,
+                            0.0D
+                    );
+
+        } else {
+
+            awayFromPlayer =
+                    awayFromPlayer.normalize();
+        }
 
         /*
-         * ---------------------------------------------------------
-         * HITBOX / VISUAL ALIGNMENT
-         * ---------------------------------------------------------
-         *
-         * HeavyCoreEntity uses:
-         *
-         *     width  = 0.5
-         *     height = 0.5
-         *
-         * Minecraft entity coordinates represent the bottom center
-         * of that hitbox.
-         *
-         * Therefore the actual hitbox center is:
-         *
-         *     X = entity origin X
-         *     Y = entity origin Y + 0.25
-         *     Z = entity origin Z
-         *
-         * The block model occupies a 1x1x1 space and must be translated
-         * so that its center is placed at that exact same point.
-         *
-         * This produces:
-         *
-         *     visual center == hitbox center
+         * rotate the model's local +y axis so that it points
+         * away from the player.
+         */
+
+        Quaternionf facingRotation =
+                new Quaternionf();
+
+        facingRotation.rotationTo(
+                new Vector3f(
+                        0.0F,
+                        1.0F,
+                        0.0F
+                ),
+                new Vector3f(
+                        (float) awayFromPlayer.x,
+                        (float) awayFromPlayer.y,
+                        (float) awayFromPlayer.z
+                )
+        );
+
+        /*
+         * the pivot itself stays at the hitbox center.
          */
 
         poseStack.translate(
-                0.0D,
-                0.25D,
-                0.0D
+                pivot.x,
+                pivot.y,
+                pivot.z
         );
 
-
         /*
-         * ---------------------------------------------------------
-         * PHYSICS WOBBLE
-         * ---------------------------------------------------------
-         *
-         * The rotations happen around the actual projectile center,
-         * rather than around the bottom of the entity hitbox.
+         * wobble around the actual hitbox pivot.
          */
 
         poseStack.mulPose(
@@ -310,33 +243,22 @@ public class HeavyCoreRenderer
                 )
         );
 
-
         poseStack.mulPose(
                 Axis.ZP.rotationDegrees(
                         state.wobbleRoll
                 )
         );
 
-
         /*
-         * ---------------------------------------------------------
-         * PROJECTILE SCALE
-         * ---------------------------------------------------------
-         *
-         * Scale around the projectile's center.
+         * make the pivot axis face away from the player.
          */
 
-        poseStack.scale(
-                PROJECTILE_SCALE,
-                PROJECTILE_SCALE,
-                PROJECTILE_SCALE
+        poseStack.mulPose(
+                facingRotation
         );
 
-
         /*
-         * ---------------------------------------------------------
-         * MAIN SPIN
-         * ---------------------------------------------------------
+         * spin around that away-from-player axis.
          */
 
         poseStack.mulPose(
@@ -345,30 +267,29 @@ public class HeavyCoreRenderer
                 )
         );
 
-
         /*
-         * ---------------------------------------------------------
-         * MOVE BLOCK MODEL CENTER TO ORIGIN
-         * ---------------------------------------------------------
+         * move the visible heavy core away from the pivot.
          *
-         * Block models use the [0, 1] block coordinate space.
-         *
-         * Moving by -0.5 on all axes puts the model center
-         * exactly at the current pose origin.
+         * this is purely visual.
          */
+
+        poseStack.translate(
+                0.0D,
+                CORE_VISUAL_OFFSET,
+                0.0D
+        );
+
+        poseStack.scale(
+                PROJECTILE_SCALE,
+                PROJECTILE_SCALE,
+                PROJECTILE_SCALE
+        );
 
         poseStack.translate(
                 -0.5D,
                 -0.5D,
                 -0.5D
         );
-
-
-        /*
-         * ---------------------------------------------------------
-         * RENDER HEAVY CORE
-         * ---------------------------------------------------------
-         */
 
         state.blockModel.submit(
                 poseStack,
@@ -378,14 +299,7 @@ public class HeavyCoreRenderer
                 state.outlineColor
         );
 
-
         poseStack.popPose();
-
-
-        /*
-         * Allow the normal entity renderer machinery to submit
-         * any additional renderer information.
-         */
 
         super.submit(
                 state,
@@ -395,11 +309,6 @@ public class HeavyCoreRenderer
         );
     }
 
-
-    // =========================================================================
-    // CHAIN RENDERING
-    // =========================================================================
-
     private void renderChain(
             HeavyCoreRenderState state,
             PoseStack poseStack,
@@ -407,20 +316,8 @@ public class HeavyCoreRenderer
     ) {
 
         /*
-         * ---------------------------------------------------------
-         * CORE CENTER
-         * ---------------------------------------------------------
-         *
-         * The HeavyCoreEntity hitbox is:
-         *
-         *     width  = 0.5
-         *     height = 0.5
-         *
-         * Therefore its center relative to entity position is:
-         *
-         *     (0, 0.25, 0)
-         *
-         * This MUST match the visual Heavy Core center above.
+         * the chain starts at the same visual pivot used by the
+         * heavy core.
          */
 
         Vec3 core =
@@ -430,13 +327,6 @@ public class HeavyCoreRenderer
                         0.0D
                 );
 
-
-        /*
-         * ---------------------------------------------------------
-         * PLAYER HAND
-         * ---------------------------------------------------------
-         */
-
         Vec3 hand =
                 new Vec3(
                         state.chainEndX,
@@ -444,35 +334,18 @@ public class HeavyCoreRenderer
                         state.chainEndZ
                 );
 
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN VECTOR
-         * ---------------------------------------------------------
-         */
-
         Vec3 difference =
                 hand.subtract(core);
 
-
         double length =
                 difference.length();
-
 
         if (length < 0.05D) {
             return;
         }
 
-
         Vec3 direction =
                 difference.normalize();
-
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN LINK COUNT
-         * ---------------------------------------------------------
-         */
 
         int links =
                 Math.max(
@@ -483,20 +356,8 @@ public class HeavyCoreRenderer
                         )
                 );
 
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN ROTATION
-         * ---------------------------------------------------------
-         *
-         * The Minecraft chain model is naturally vertical,
-         * so rotate its +Y axis onto the direction from
-         * Heavy Core -> player's hand.
-         */
-
         Quaternionf rotation =
                 new Quaternionf();
-
 
         rotation.rotationTo(
                 new Vector3f(
@@ -511,23 +372,11 @@ public class HeavyCoreRenderer
                 )
         );
 
-
-        /*
-         * ---------------------------------------------------------
-         * RENDER EACH LINK
-         * ---------------------------------------------------------
-         */
-
         for (int i = 0; i < links; i++) {
-
-            /*
-             * Put each link in the center of its segment.
-             */
 
             double t =
                     (i + 0.5D)
                             / links;
-
 
             Vec3 position =
                     core.lerp(
@@ -535,13 +384,7 @@ public class HeavyCoreRenderer
                             t
                     );
 
-
             poseStack.pushPose();
-
-
-            /*
-             * Position the link.
-             */
 
             poseStack.translate(
                     position.x,
@@ -549,22 +392,9 @@ public class HeavyCoreRenderer
                     position.z
             );
 
-
-            /*
-             * Rotate the vertical chain model to follow
-             * the actual chain direction.
-             */
-
             poseStack.mulPose(
                     rotation
             );
-
-
-            /*
-             * Alternate successive chain links by 90 degrees.
-             *
-             * This makes them look interlocked instead of stacked.
-             */
 
             if ((i & 1) == 1) {
 
@@ -575,32 +405,17 @@ public class HeavyCoreRenderer
                 );
             }
 
-
-            /*
-             * Scale chain model.
-             */
-
             poseStack.scale(
                     CHAIN_SCALE,
                     CHAIN_SCALE,
                     CHAIN_SCALE
             );
 
-
-            /*
-             * Center the 1x1x1 block model on this link's position.
-             */
-
             poseStack.translate(
                     -0.5D,
                     -0.5D,
                     -0.5D
             );
-
-
-            /*
-             * Submit chain model.
-             */
 
             state.chainModel.submit(
                     poseStack,
@@ -610,15 +425,9 @@ public class HeavyCoreRenderer
                     state.outlineColor
             );
 
-
             poseStack.popPose();
         }
     }
-
-
-    // =========================================================================
-    // OWNER
-    // =========================================================================
 
     private Player getOwner(
             HeavyCoreEntity entity
@@ -627,30 +436,21 @@ public class HeavyCoreRenderer
         UUID ownerUuid =
                 entity.getOwnerUuid();
 
-
         if (ownerUuid == null) {
             return null;
         }
 
-
         Minecraft minecraft =
                 Minecraft.getInstance();
-
 
         if (minecraft.level == null) {
             return null;
         }
 
-
         return minecraft.level.getPlayerByUUID(
                 ownerUuid
         );
     }
-
-
-    // =========================================================================
-    // HAND POSITION
-    // =========================================================================
 
     private Vec3 getHandPosition(
             Player player,
@@ -660,14 +460,8 @@ public class HeavyCoreRenderer
         float yaw =
                 player.getYRot();
 
-
         double radians =
                 Math.toRadians(yaw);
-
-
-        /*
-         * Player's horizontal right direction.
-         */
 
         Vec3 right =
                 new Vec3(
@@ -676,46 +470,21 @@ public class HeavyCoreRenderer
                         Math.sin(radians)
                 );
 
-
-        /*
-         * Determine which hand holds the flail.
-         */
-
         boolean left =
                 entity.isLeftHand();
-
-
-        /*
-         * Position outside the player's body.
-         */
 
         double sideOffset =
                 left
                         ? -0.36D
                         : 0.36D;
 
-
-        /*
-         * Small amount forward from the player.
-         */
-
         double forwardOffset =
                 0.04D;
-
-
-        /*
-         * Approximate hand height.
-         */
 
         double handHeight =
                 player.isCrouching()
                         ? 1.02D
                         : 1.22D;
-
-
-        /*
-         * Player's horizontal forward direction.
-         */
 
         Vec3 forward =
                 new Vec3(
@@ -723,7 +492,6 @@ public class HeavyCoreRenderer
                         0.0D,
                         Math.cos(radians)
                 );
-
 
         return player.position()
                 .add(
@@ -743,76 +511,32 @@ public class HeavyCoreRenderer
                 );
     }
 
-
-    // =========================================================================
-    // RENDER STATE
-    // =========================================================================
-
     public static class HeavyCoreRenderState
             extends EntityRenderState {
-
-        /*
-         * ---------------------------------------------------------
-         * HEAVY CORE MODEL
-         * ---------------------------------------------------------
-         */
 
         public final BlockModelRenderState blockModel =
                 new BlockModelRenderState();
 
-
         public final BlockDisplayContext blockDisplayContext =
                 BlockDisplayContext.create();
-
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN MODEL
-         * ---------------------------------------------------------
-         */
 
         public final BlockModelRenderState chainModel =
                 new BlockModelRenderState();
 
-
         public final BlockDisplayContext chainDisplayContext =
                 BlockDisplayContext.create();
 
-
-        /*
-         * ---------------------------------------------------------
-         * ROTATION
-         * ---------------------------------------------------------
-         */
-
         public float spinAngle;
-
-
-        /*
-         * ---------------------------------------------------------
-         * PHYSICS WOBBLE
-         * ---------------------------------------------------------
-         */
 
         public float wobblePitch;
 
         public float wobbleRoll;
-
-
-        /*
-         * ---------------------------------------------------------
-         * CHAIN END
-         * ---------------------------------------------------------
-         *
-         * Position of player's hand relative to the entity render origin.
-         */
 
         public double chainEndX;
 
         public double chainEndY;
 
         public double chainEndZ;
-
 
         public boolean hasChain;
     }

@@ -116,41 +116,6 @@ public class FlailItem extends Item {
                 .build();
     }
 
-
-    // =========================================================================
-    // MELEE BLEED
-    // =========================================================================
-
-    @Override
-    public void hurtEnemy(
-            ItemStack stack,
-            LivingEntity target,
-            LivingEntity attacker
-    ) {
-
-        MobEffectInstance existing =
-                target.getEffect(
-                        ModEffects.BLEED
-                );
-
-
-        int amplifier =
-                existing == null
-                        ? 0
-                        : existing.getAmplifier() + 1;
-
-
-        target.addEffect(
-                new MobEffectInstance(
-                        ModEffects.BLEED,
-                        20,
-                        amplifier
-                ),
-                attacker
-        );
-    }
-
-
     // =========================================================================
     // START / CONTINUE USING
     // =========================================================================

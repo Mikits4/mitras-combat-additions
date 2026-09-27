@@ -2909,7 +2909,62 @@ public class HeavyCoreEntity extends Projectile {
     // RETURN
     // =========================================================================
 
-    private void beginReturning() {
+    public void cancelUse() {
+
+        if (
+                !isCharging()
+                        && !isSagging()
+        ) {
+
+            return;
+        }
+
+
+        setState(
+                State.READY
+        );
+
+
+        entityData.set(
+                DATA_CHARGE_TICKS,
+                0
+        );
+
+
+        entityData.set(
+                DATA_HOOKED_ENTITY,
+                ""
+        );
+
+
+        orbitAngle =
+                0.0D;
+
+
+        flightTicks =
+                0;
+
+
+        hookTicks =
+                0;
+
+
+        setNoGravity(
+                true
+        );
+
+
+        this.noPhysics =
+                true;
+
+
+        setDeltaMovement(
+                Vec3.ZERO
+        );
+    }
+
+
+    public void beginReturning() {
 
         setState(
                 State.RETURNING

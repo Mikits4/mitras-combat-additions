@@ -11,6 +11,7 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.EquipmentSlotGroup;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
@@ -66,9 +67,11 @@ public class FlailItem extends Item {
          * them into the item's Properties.
          */
         super(
-                properties.attributes(
-                        createAttributes()
-                )
+                properties
+                        .stacksTo(1)
+                        .attributes(
+                                createAttributes()
+                        )
         );
     }
 
@@ -191,6 +194,8 @@ public class FlailItem extends Item {
              * Continue using the item so releaseUsing() fires when
              * the player releases right click.
              */
+            state.useHand = hand;
+
             player.startUsingItem(
                     hand
             );
@@ -369,6 +374,8 @@ public class FlailItem extends Item {
         }
 
 
+        state.useHand = hand;
+
         player.startUsingItem(
                 hand
         );
@@ -398,6 +405,82 @@ public class FlailItem extends Item {
     ) {
 
         return 72000;
+    }
+
+
+    // =========================================================================
+    // INTERRUPTED USE
+    // =========================================================================
+
+    @Override
+    public void inventoryTick(
+            ItemStack stack,
+            ServerLevel level,
+            Entity entity,
+            EquipmentSlot slot
+    ) {
+
+        super.inventoryTick(
+                stack,
+                level,
+                entity,
+                slot
+        );
+
+        if (
+                !(entity instanceof Player player)
+        ) {
+
+            return;
+        }
+
+        FlailState state =
+                ACTIVE_FLAILS.get(
+                        player.getUUID()
+                );
+
+        if (
+                state == null
+                        || state.useHand == null
+        ) {
+
+            return;
+        }
+
+        EquipmentSlot expectedSlot =
+                state.useHand == InteractionHand.MAIN_HAND
+                        ? EquipmentSlot.MAINHAND
+                        : EquipmentSlot.OFFHAND;
+
+        /*
+         * Swapping hands while charging moves the ItemStack to the other
+         * equipment slot.  That interrupts Minecraft's item-use state, so
+         * releaseUsing() is not a safe place to handle the cancellation.
+         *
+         * The Item itself is still ticked in its new slot, letting us detect
+         * the move and cancel the projectile cleanly without throwing or
+         * returning it as if the player had released the swing.
+         */
+        if (
+                slot != expectedSlot
+        ) {
+
+            HeavyCoreEntity core =
+                    state.getCore(
+                            level
+                    );
+
+            if (
+                    core != null
+                            && core.isAlive()
+                            && (core.isCharging() || core.isSagging())
+            ) {
+
+                core.cancelUse();
+            }
+
+            state.useHand = null;
+        }
     }
 
 
@@ -454,6 +537,34 @@ public class FlailItem extends Item {
 
             state.coreUuid =
                     null;
+            state.useHand = null;
+
+            return false;
+        }
+
+
+        /*
+         * An interrupted item use (most notably swapping hands with the
+         * offhand key) must not count as releasing the flail to throw it.
+         * Only the same hand and same ItemStack that started the use may
+         * complete a charge.
+         */
+        InteractionHand useHand = state.useHand;
+
+        if (
+                useHand == null
+                        || player.getItemInHand(useHand) != stack
+        ) {
+
+            state.useHand = null;
+
+            if (
+                    core.isCharging()
+                            || core.isSagging()
+            ) {
+
+                core.cancelUse();
+            }
 
             return false;
         }
@@ -472,6 +583,7 @@ public class FlailItem extends Item {
         ) {
 
             core.releaseSagging();
+            state.useHand = null;
 
             return true;
         }
@@ -514,6 +626,7 @@ public class FlailItem extends Item {
                 1.0F
         );
 
+        state.useHand = null;
 
         return true;
     }
@@ -526,6 +639,7 @@ public class FlailItem extends Item {
     private static class FlailState {
 
         private UUID coreUuid;
+        private InteractionHand useHand;
 
 
         private HeavyCoreEntity getCore(

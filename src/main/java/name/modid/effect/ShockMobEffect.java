@@ -5,11 +5,11 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectCategory;
 import net.minecraft.world.entity.LivingEntity;
 
-public class BleedMobEffect extends MobEffect {
+public class ShockMobEffect extends MobEffect {
 
     public static final int DAMAGE_INTERVAL = 40;
 
-    protected BleedMobEffect(
+    protected ShockMobEffect(
             final MobEffectCategory category,
             final int color
     ) {

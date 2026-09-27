@@ -11,13 +11,13 @@ import net.minecraft.world.effect.MobEffectCategory;
 
 public class ModEffects {
 
-    public static final Holder<MobEffect> BLEED = Registry.registerForHolder(
+    public static final Holder<MobEffect> SHOCK = Registry.registerForHolder(
             BuiltInRegistries.MOB_EFFECT,
             Identifier.fromNamespaceAndPath(
                     MitraSCombatAdditions.MOD_ID,
                     "bleed"
             ),
-            new BleedMobEffect(
+            new ShockMobEffect(
                     MobEffectCategory.HARMFUL,
                     7561558
             )

@@ -1,7 +1,7 @@
 package name.modid;
 
 import name.modid.effect.ModEffects;
-import name.modid.item.ModCreativeModeTabs;
+import name.modid.creative.ModCreativeModeTabs;
 import name.modid.item.ModItems;
 
 import net.fabricmc.api.ModInitializer;

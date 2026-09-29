@@ -1,7 +1,7 @@
 package name.modid.entity;
 
 import name.modid.MitraSCombatAdditions;
-import name.modid.entity.custom.HeavyCoreEntity;
+import name.modid.entity.custom.FlailEntity;
 
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -14,12 +14,12 @@ import net.minecraft.world.entity.MobCategory;
 
 public class ModEntities {
 
-    public static final EntityType<HeavyCoreEntity> HEAVY_CORE_ENTITY =
+    public static final EntityType<FlailEntity> HEAVY_CORE_ENTITY =
             register(
                     "heavy_core_entity",
                     EntityType.Builder
                             .of(
-                                    HeavyCoreEntity::new,
+                                    FlailEntity::new,
                                     MobCategory.MISC
                             )
                             .sized(

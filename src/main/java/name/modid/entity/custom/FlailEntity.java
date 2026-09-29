@@ -33,7 +33,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-public class HeavyCoreEntity extends Projectile {
+public class FlailEntity extends Projectile {
 
     // =========================================================================
     // TUNING
@@ -297,37 +297,37 @@ public class HeavyCoreEntity extends Projectile {
 
     private static final EntityDataAccessor<Integer> DATA_STATE =
             SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
+                    FlailEntity.class,
                     EntityDataSerializers.INT
             );
 
     private static final EntityDataAccessor<String> DATA_OWNER =
             SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
+                    FlailEntity.class,
                     EntityDataSerializers.STRING
             );
 
     private static final EntityDataAccessor<String> DATA_HOOKED_ENTITY =
             SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
+                    FlailEntity.class,
                     EntityDataSerializers.STRING
             );
 
     private static final EntityDataAccessor<Boolean> DATA_REVERSE_PULL =
             SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
+                    FlailEntity.class,
                     EntityDataSerializers.BOOLEAN
             );
 
     private static final EntityDataAccessor<Boolean> DATA_LEFT_HAND =
             SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
+                    FlailEntity.class,
                     EntityDataSerializers.BOOLEAN
             );
 
     private static final EntityDataAccessor<Integer> DATA_CHARGE_TICKS =
             SynchedEntityData.defineId(
-                    HeavyCoreEntity.class,
+                    FlailEntity.class,
                     EntityDataSerializers.INT
             );
 
@@ -421,8 +421,8 @@ public class HeavyCoreEntity extends Projectile {
     // CONSTRUCTOR
     // =========================================================================
 
-    public HeavyCoreEntity(
-            EntityType<? extends HeavyCoreEntity> type,
+    public FlailEntity(
+            EntityType<? extends FlailEntity> type,
             Level level
     ) {
 

@@ -27,9 +27,12 @@ dependencies {
 }
 
 loom {
-	runs {
-		client {
-			vmArgs "-Dfabric.development=false"
+	splitEnvironmentSourceSets()
+
+	mods {
+		"mitras-combat-additions" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
 		}
 	}
 }

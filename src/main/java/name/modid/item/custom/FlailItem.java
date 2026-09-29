@@ -1,15 +1,13 @@
 package name.modid.item.custom;
 
-import name.modid.effect.ModEffects;
 import name.modid.entity.ModEntities;
-import name.modid.entity.custom.HeavyCoreEntity;
+import name.modid.entity.custom.FlailEntity;
 
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.EquipmentSlotGroup;
@@ -167,7 +165,7 @@ public class FlailItem extends Item {
                 );
 
 
-        HeavyCoreEntity core =
+        FlailEntity core =
                 state.getCore(
                         serverLevel
                 );
@@ -241,7 +239,7 @@ public class FlailItem extends Item {
         ) {
 
             core =
-                    new HeavyCoreEntity(
+                    new FlailEntity(
                             ModEntities.HEAVY_CORE_ENTITY,
                             serverLevel
                     );
@@ -465,7 +463,7 @@ public class FlailItem extends Item {
                 slot != expectedSlot
         ) {
 
-            HeavyCoreEntity core =
+            FlailEntity core =
                     state.getCore(
                             level
                     );
@@ -524,7 +522,7 @@ public class FlailItem extends Item {
         }
 
 
-        HeavyCoreEntity core =
+        FlailEntity core =
                 state.getCore(
                         serverLevel
                 );
@@ -642,7 +640,7 @@ public class FlailItem extends Item {
         private InteractionHand useHand;
 
 
-        private HeavyCoreEntity getCore(
+        private FlailEntity getCore(
                 ServerLevel level
         ) {
 
@@ -661,7 +659,7 @@ public class FlailItem extends Item {
 
 
             if (
-                    entity instanceof HeavyCoreEntity core
+                    entity instanceof FlailEntity core
             ) {
 
                 if (

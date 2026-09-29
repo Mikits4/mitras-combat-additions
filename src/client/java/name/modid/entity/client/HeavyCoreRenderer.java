@@ -1,6 +1,6 @@
 package name.modid.entity.client;
 
-import name.modid.entity.custom.HeavyCoreEntity;
+import name.modid.entity.custom.FlailEntity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
@@ -26,7 +26,7 @@ import java.util.UUID;
 
 public class HeavyCoreRenderer
         extends EntityRenderer<
-        HeavyCoreEntity,
+        FlailEntity,
         HeavyCoreRenderer.HeavyCoreRenderState> {
 
     // =========================================================================
@@ -81,7 +81,7 @@ public class HeavyCoreRenderer
 
     @Override
     public void extractRenderState(
-            HeavyCoreEntity entity,
+            FlailEntity entity,
             HeavyCoreRenderState state,
             float partialTick
     ) {
@@ -526,7 +526,7 @@ public class HeavyCoreRenderer
     // =========================================================================
 
     private Player getOwner(
-            HeavyCoreEntity entity
+            FlailEntity entity
     ) {
 
         UUID ownerUuid =
@@ -565,7 +565,7 @@ public class HeavyCoreRenderer
 
     private Vec3 getHandPosition(
             Player player,
-            HeavyCoreEntity entity
+            FlailEntity entity
     ) {
 
         float yaw =

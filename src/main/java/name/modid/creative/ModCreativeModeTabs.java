@@ -1,6 +1,7 @@
-package name.modid.item;
+package name.modid.creative;
 
 import name.modid.MitraSCombatAdditions;
+import name.modid.item.ModItems;
 import net.fabricmc.fabric.api.creativetab.v1.FabricCreativeModeTab;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
